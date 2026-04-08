@@ -136,8 +136,12 @@ class CommunicationAgent {
         this._handlers.onPush?.(userId, arg);
         break;
 
+      case '/repo':
+        this._handlers.onRepo?.(userId);
+        break;
+
       default:
-        await this.send(userId, `Unknown command: ${command}\nAvailable: /init, /connect, /switch, /push, /resume, /cancel, /logs`);
+        await this.send(userId, `Unknown command: ${command}\nAvailable: /init, /connect, /switch, /push, /resume, /cancel, /logs, /repo`);
     }
   }
 }

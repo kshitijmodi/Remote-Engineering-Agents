@@ -64,9 +64,15 @@ Instructions:
    */
   async test(repoPath, onProgress) {
     const testRunner = this._detectTestRunner(repoPath);
-    const runCommand = testRunner ? `Run the tests using: ${testRunner}` : 'Detect and run the test suite for this project.';
 
-    const prompt = `${runCommand}
+    // No test suite detected — skip rather than letting Claude guess and hang
+    if (!testRunner) {
+      return { passed: true, passedCount: 0, failedCount: 0, details: 'No test suite detected — skipping.', rawOutput: '', budget: this._executor.budgetStatus, executorSuccess: true };
+    }
+
+    const prompt = `Run the tests using: ${testRunner}
+
+IMPORTANT: Run once and exit. Do not start watch mode. Set CI=true if needed.
 
 Report the results in this exact format:
 STATUS: PASS or FAIL

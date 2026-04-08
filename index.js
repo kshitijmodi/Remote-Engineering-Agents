@@ -74,6 +74,9 @@ async function main() {
   );
 
   // ── Checkpoint resume on startup ──────────────────────────────────────────
+  // Restore active repo selections before resuming any in-progress tasks
+  repoAgent._loadActiveRepos();
+
   // If the server crashed mid-task, notify the user their task was interrupted
   if (fs.existsSync(CHECKPOINT_DIR)) {
     const checkpoints = fs.readdirSync(CHECKPOINT_DIR).filter(f => f.endsWith('.json'));
@@ -164,19 +167,13 @@ async function main() {
     },
 
     onInit: async (userId, arg) => {
-      // arg format: "<folder-path>" or "<folder-path> <repo-name>"
       const parts = arg.match(/^"([^"]+)"|^(\S+)/);
       const folderPath = parts ? (parts[1] || parts[2]) : arg;
-      const remainder = arg.slice(folderPath.length + (arg.startsWith('"') ? 2 : 0)).trim();
-      const repoName = remainder || undefined;
 
-      await reliableSend(userId, `Initializing *${folderPath}* as a GitHub repo...`);
+      await reliableSend(userId, `Setting up *${folderPath}* as active workspace...`);
       try {
-        const { repoName: name, repoPath, githubUrl } = await repoAgent.init(userId, folderPath, { repoName });
-        await reliableSend(
-          userId,
-          `Done! Repo created and pushed.\n*Name:* ${name}\n*Path:* ${repoPath}\n*GitHub:* ${githubUrl || 'check GitHub'}\n\nActive workspace set to this project.`
-        );
+        const { repoName, repoPath } = await repoAgent.init(userId, folderPath);
+        await reliableSend(userId, `Done! Active workspace set to *${repoName}*.\n*Path:* ${repoPath}\n\nSend a task to start working on it.`);
       } catch (err) {
         await reliableSend(userId, `Init failed: ${err.message}`);
       }
@@ -253,6 +250,11 @@ async function main() {
       }
       const logs = logging.getTailLogs(task.taskId, 20);
       await reliableSend(userId, `*Logs for task ${task.taskId}:*\n\`\`\`\n${logs}\n\`\`\``);
+    },
+
+    onRepo: async (userId) => {
+      const repoName = repoAgent.getActiveRepo(userId);
+      await reliableSend(userId, repoName ? `Active repo: *${repoName}*` : 'No active repo set.');
     },
   });
 

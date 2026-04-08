@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 
 const WORKSPACE_DIR = path.resolve(__dirname, '../../workspace');
+const CHECKPOINTS_DIR = path.resolve(__dirname, '../../checkpoints');
+const ACTIVE_REPOS_FILE = path.join(CHECKPOINTS_DIR, 'active-repos.json');
 
 /**
  * RepoAgent
@@ -23,6 +25,8 @@ class RepoAgent {
     this._locks = new Map();
 
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.mkdirSync(CHECKPOINTS_DIR, { recursive: true });
+    this._loadActiveRepos();
   }
 
   /**
@@ -55,6 +59,7 @@ class RepoAgent {
     }
 
     this._activeRepo.set(userId, repoName);
+    this._saveActiveRepos();
     return { repoName, repoPath, alreadyCloned };
   }
 
@@ -66,11 +71,18 @@ class RepoAgent {
    * @returns {{ repoName: string, repoPath: string }}
    */
   switch(userId, repoName) {
+    // Check custom paths (from /init) first
+    if (this._customPaths?.has(repoName)) {
+      this._activeRepo.set(userId, repoName);
+      this._saveActiveRepos();
+      return { repoName, repoPath: this._customPaths.get(repoName) };
+    }
     const repoPath = path.join(WORKSPACE_DIR, repoName);
     if (!fs.existsSync(repoPath)) {
       throw new RepoNotFoundError(repoName);
     }
     this._activeRepo.set(userId, repoName);
+    this._saveActiveRepos();
     return { repoName, repoPath };
   }
 
@@ -101,6 +113,15 @@ class RepoAgent {
   }
 
   /**
+   * Get the active repo name for display purposes.
+   * @param {string} userId
+   * @returns {string|null}
+   */
+  getActiveRepo(userId) {
+    return this._activeRepo.get(userId) ?? null;
+  }
+
+  /**
    * Initialize a local folder as a git repo, create it on GitHub, and set as active workspace.
    * Uses the folder as-is — no copying.
    *
@@ -111,74 +132,31 @@ class RepoAgent {
    * @param {boolean} [opts.private]    - Make repo private (default: false)
    * @returns {Promise<{ repoName: string, repoPath: string, githubUrl: string }>}
    */
-  async init(userId, folderPath, { repoName, private: isPrivate = false } = {}) {
+  async init(userId, folderPath) {
     if (!fs.existsSync(folderPath)) {
       throw new Error(`Folder not found: ${folderPath}`);
     }
 
-    const name = repoName || path.basename(folderPath);
     const resolvedPath = path.resolve(folderPath);
+    const name = path.basename(resolvedPath);
 
-    // 1. Git init if not already a repo
+    // Ensure it's a git repo so Claude Code can commit changes
     const isGitRepo = fs.existsSync(path.join(resolvedPath, '.git'));
     if (!isGitRepo) {
       await this._git(['init'], resolvedPath);
-    }
-    // Check if there are any commits (git init + previous failure leaves .git with no commits)
-    const hasCommits = await this._git(['log', '--oneline', '-1'], resolvedPath).then(() => true).catch(() => false);
-    if (!hasCommits) {
       await this._git(['config', 'core.autocrlf', 'false'], resolvedPath);
       await this._git(['config', 'core.safecrlf', 'false'], resolvedPath);
-      // Ensure a .gitignore exists to exclude common junk before staging
-      const gitignorePath = path.join(resolvedPath, '.gitignore');
-      if (!fs.existsSync(gitignorePath)) {
-        fs.writeFileSync(gitignorePath, [
-          'node_modules/',
-          '.wwebjs_auth*/',
-          '.wwebjs_cache/',
-          'workspace/',
-          'logs/',
-          'checkpoints/',
-          '.env',
-          '*.log',
-        ].join('\n') + '\n');
-      } else {
-        // Append entries if not already present
-        let existing = fs.readFileSync(gitignorePath, 'utf8');
-        const entries = ['.wwebjs_auth*/', '.wwebjs_cache/', 'workspace/', '.env'];
-        const toAdd = entries.filter(e => !existing.includes(e));
-        if (toAdd.length) fs.appendFileSync(gitignorePath, '\n' + toAdd.join('\n') + '\n');
-      }
       await this._git(['add', '-A'], resolvedPath);
       await this._git(['commit', '-m', 'Initial commit'], resolvedPath);
     }
 
-    // 2. Create GitHub repo via gh CLI
-    const privFlag = isPrivate ? '--private' : '--public';
-    let githubUrl = '';
-    try {
-      const out = await this._ghRun(['repo', 'create', name, privFlag, '--source', '.', '--push'], resolvedPath);
-      githubUrl = out.trim();
-    } catch (err) {
-      // Repo may already exist on GitHub — try adding remote and pushing
-      try {
-        const whoami = await this._ghRun(['api', 'user', '--jq', '.login'], resolvedPath);
-        const username = whoami.trim();
-        githubUrl = `https://github.com/${username}/${name}`;
-        await this._git(['remote', 'add', 'origin', githubUrl], resolvedPath).catch(() => {});
-        await this._git(['push', '-u', 'origin', 'HEAD'], resolvedPath);
-      } catch (pushErr) {
-        throw new Error(`GitHub repo creation failed: ${err.message}\nPush also failed: ${pushErr.message}`);
-      }
-    }
-
-    // 3. Set as active workspace
+    // Set as active workspace
     this._activeRepo.set(userId, name);
-    // Register in the internal map so getActiveRepoPath works
     this._customPaths = this._customPaths || new Map();
     this._customPaths.set(name, resolvedPath);
+    this._saveActiveRepos();
 
-    return { repoName: name, repoPath: resolvedPath, githubUrl };
+    return { repoName: name, repoPath: resolvedPath, githubUrl: null };
   }
 
   /**
@@ -219,6 +197,39 @@ class RepoAgent {
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
+
+  _saveActiveRepos() {
+    try {
+      const data = {
+        activeRepos: Object.fromEntries(this._activeRepo),
+        customPaths: Object.fromEntries(this._customPaths || new Map()),
+      };
+      fs.writeFileSync(ACTIVE_REPOS_FILE, JSON.stringify(data, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[RepoAgent] Failed to save active repos:', err.message);
+    }
+  }
+
+  _loadActiveRepos() {
+    try {
+      if (!fs.existsSync(ACTIVE_REPOS_FILE)) return;
+      const data = JSON.parse(fs.readFileSync(ACTIVE_REPOS_FILE, 'utf8'));
+      // Support both old format (plain object) and new format (with customPaths)
+      const activeRepos = data.activeRepos ?? data;
+      const customPaths = data.customPaths ?? {};
+      for (const [userId, repoName] of Object.entries(activeRepos)) {
+        this._activeRepo.set(userId, repoName);
+      }
+      this._customPaths = this._customPaths || new Map();
+      for (const [name, p] of Object.entries(customPaths)) {
+        if (fs.existsSync(p)) { // only restore if folder still exists
+          this._customPaths.set(name, p);
+        }
+      }
+    } catch (err) {
+      console.warn('[RepoAgent] Failed to load active repos:', err.message);
+    }
+  }
 
   _repoNameFromUrl(url) {
     // https://github.com/user/my-repo.git → my-repo

@@ -88,6 +88,7 @@ review
 |---|---|
 | `/connect <repo-url>` | Clone repo and set as active workspace |
 | `/switch <repo-name>` | Switch active workspace |
+| `/repo` | Show the currently active repo name (persists across restarts) |
 | `/resume` | Grant 10 more Claude Code invocations and continue paused task |
 | `/cancel` | Abort current task |
 | `/logs` | Return latest log output for active task |
