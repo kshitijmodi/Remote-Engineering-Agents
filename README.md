@@ -12,6 +12,70 @@ coding, testing, debugging, and PR creation — all using Claude Code CLI as the
 
 ---
 
+## Getting Started
+
+### 1. Prerequisites *(install once)*
+
+- **Node.js** — download and install from [nodejs.org](https://nodejs.org)
+- **Claude Code CLI**
+  - `npm install -g @anthropic-ai/claude-code`
+  - `claude login`
+- **GitHub CLI** *(only needed for `/connect` and PR creation)*
+  - Download from [cli.github.com](https://cli.github.com)
+  - `gh auth login`
+
+### 2. Clone and Install
+
+```bash
+git clone https://github.com/kshitijmodi/Remote-Engineering-Agents
+cd Remote-Engineering-Agents
+npm install
+```
+
+### 3. Configure
+
+Create a `.env` file in the root:
+
+```
+ALLOWED_NUMBERS=15513582416@c.us
+```
+
+Replace with your own WhatsApp number in the format `<countrycode><number>@c.us`.
+
+### 4. Start the Bot
+
+```bash
+node index.js
+```
+
+Scan the QR code that appears in the terminal with WhatsApp (Linked Devices → Link a Device).
+
+### 5. Point at a Project
+
+In WhatsApp, send one of:
+
+```
+/connect https://github.com/you/your-repo
+```
+*(clones from GitHub and sets as active workspace)*
+
+```
+/init "C:\path\to\local\project"
+```
+*(uses an existing local folder as active workspace)*
+
+### 6. Send Tasks
+
+Just type naturally in WhatsApp:
+
+```
+Add a dark mode toggle to the settings page
+```
+
+The bot will plan, code, test, review, and open a PR automatically.
+
+---
+
 ## Core Stack
 
 - **WhatsApp Interface:** `whatsapp-web.js`
