@@ -1,0 +1,12 @@
+[
+  {
+    "role": "user",
+    "text": "What's the repo",
+    "timestamp": "2026-04-09T03:40:28.263Z"
+  },
+  {
+    "role": "assistant",
+    "text": "**WhatsApp Claude Code Agent** — a WhatsApp-controlled multi-agent software development bot.\n\n**Core idea:** You send a natural language task via WhatsApp, and the system orchestrates a full dev workflow (plan → code → test → debug → review → PR) using Claude Code CLI as the execution engine. No direct LLM API calls — all intelligence goes through `claude-code`.\n\n**Stack:** Node.js + `whatsapp-web.js` + Claude Code CLI + Git CLI\n\n**Agents implemented** (`src/agents/`):\n- `CommunicationAgent` — W",
+    "timestamp": "2026-04-09T03:40:28.277Z"
+  }
+]

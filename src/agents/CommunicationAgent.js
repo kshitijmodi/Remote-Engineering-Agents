@@ -140,8 +140,12 @@ class CommunicationAgent {
         this._handlers.onRepo?.(userId);
         break;
 
+      case '/clear-context':
+        this._handlers.onClearContext?.(userId);
+        break;
+
       default:
-        await this.send(userId, `Unknown command: ${command}\nAvailable: /init, /connect, /switch, /push, /resume, /cancel, /logs, /repo`);
+        await this.send(userId, `Unknown command: ${command}\nAvailable: /init, /connect, /switch, /push, /resume, /cancel, /logs, /repo, /clear-context`);
     }
   }
 }

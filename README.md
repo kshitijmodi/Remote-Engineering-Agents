@@ -244,16 +244,10 @@ checkpoints/
 
 Build one agent at a time. Do not proceed to the next until the current one is tested.
 
-1. **Communication Agent** — WhatsApp bot, whitelist, slash command parsing
-2. **Repo Agent** — `/connect`, `/switch`, workspace isolation
-3. **Execution Agent** — single Claude Code CLI call, result returned to WhatsApp
-4. **Orchestration Agent** — state machine wiring all agents together
-5. **Planning Agent** — task breakdown via Claude Code
-6. **Debugging Agent** — iterative fix loop
-7. **Review Agent** — diff review with PASS/FAIL output
-8. **Logging Agent** — structured logs, checkpoints, `/logs` command
-9. **Token Budget System** — invocation tracking, pause/resume
-10. **Heartbeat + Disconnect Handling** — reliability layer
+1. **Execution Agent** — single Claude Code CLI call, result returned to WhatsApp
+2. **Planning Agent** — task breakdown via Claude Code
+3. **Logging Agent** — structured logs, checkpoints, `/logs` command
+4. **Heartbeat + Disconnect Handling** — reliability layer
 
 ---
 
