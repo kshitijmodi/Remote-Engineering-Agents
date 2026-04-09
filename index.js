@@ -82,24 +82,17 @@ async function main() {
   // Restore active repo selections before resuming any in-progress tasks
   repoAgent._loadActiveRepos();
 
-  // If the server crashed mid-task, notify the user their task was interrupted
+  // If the server crashed mid-task, auto-resume interrupted tasks after reconnect
+  const pendingResumes = [];
   if (fs.existsSync(CHECKPOINT_DIR)) {
-    const checkpoints = fs.readdirSync(CHECKPOINT_DIR).filter(f => f.endsWith('.json'));
+    const checkpoints = fs.readdirSync(CHECKPOINT_DIR).filter(f => f.endsWith('.json') && f !== 'active-repos.json');
     for (const file of checkpoints) {
       try {
         const cp = JSON.parse(fs.readFileSync(path.join(CHECKPOINT_DIR, file), 'utf8'));
         const inProgress = !['pr_created', 'failed', 'cancelled'].includes(cp.status);
-        if (inProgress && cp.userId) {
-          console.log(`[Startup] Found interrupted task ${cp.taskId} at stage: ${cp.status}`);
-          // Notify after connect — queue it
-          messaging.once?.('ready', async () => {
-            await reliableSend(
-              cp.userId,
-              `System restarted. Your task *${cp.taskId}* was interrupted at stage: *${cp.status}*.\n` +
-              `Budget was: ${cp.invocations}/15\n` +
-              `Send your task again to restart, or /logs to see where it stopped.`
-            );
-          });
+        if (inProgress && cp.userId && cp.repo) {
+          console.log(`[Startup] Found interrupted task ${cp.taskId} at stage: ${cp.status} — will auto-resume`);
+          pendingResumes.push(cp);
         }
       } catch { /* malformed checkpoint — skip */ }
     }
@@ -280,9 +273,60 @@ async function main() {
       context.clear(repoPath);
       await reliableSend(userId, 'Context cleared for this repo.');
     },
+
+    onList: async (userId) => {
+      const workspaceRepos = repoAgent.listRepos();
+      const customRepos = [...(repoAgent._customPaths?.keys() ?? [])];
+      const activeRepo = repoAgent.getActiveRepo(userId);
+      const all = [...new Set([...workspaceRepos, ...customRepos])];
+      if (!all.length) {
+        await reliableSend(userId, 'No repos registered. Use /connect or /init to add one.');
+        return;
+      }
+      const lines = all.map(r => `${r === activeRepo ? '▶ ' : '  '}${r}`);
+      await reliableSend(userId, `*Registered workspaces:*\n${lines.join('\n')}\n\n▶ = active`);
+    },
+
+    onRestart: async (userId) => {
+      await reliableSend(userId, '🔄 Restarting bot... will be back in a few seconds.');
+      await messaging.disconnect().catch(() => {});
+      setTimeout(() => process.exit(0), 1000);
+    },
+
+    onStop: async (userId) => {
+      await reliableSend(userId, '🛑 Stopping bot. Use pm2 start rea to bring it back up.');
+      await messaging.disconnect().catch(() => {});
+      setTimeout(() => process.exit(0), 1000);
+    },
   });
 
   commAgent.start();
+
+  // ── Auto-resume interrupted tasks after WhatsApp connects ─────────────────
+  if (pendingResumes.length > 0) {
+    messaging._client?.once('ready', async () => {
+      for (const cp of pendingResumes) {
+        try {
+          await reliableSend(
+            cp.userId,
+            `🔄 *Resuming interrupted task* ${cp.taskId}\nStage: *${cp.status}* | Budget used: ${cp.invocations}/15`
+          );
+          // Restore repo context and restart task from checkpoint stage
+          const repoPath = cp.repo;
+          executor.invocations = cp.invocations ?? 0;
+          const taskId = orchestrator.startTask(cp.userId, cp.taskText, repoPath, context);
+          // Fast-forward state to where it was interrupted
+          const task = orchestrator.getActiveTask(cp.userId);
+          if (task && cp.status !== 'planning' && cp.status !== 'queued') {
+            task.status = cp.status;
+            task.retries = cp.retries ?? { coding: 0, debugging: 0, review: 0 };
+          }
+        } catch (err) {
+          console.error(`[Startup] Failed to resume task ${cp.taskId}:`, err.message);
+        }
+      }
+    });
+  }
 
   // ── Heartbeat ─────────────────────────────────────────────────────────────
   let lastHeartbeat = Date.now();
