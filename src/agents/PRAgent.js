@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 
 const IS_WINDOWS = process.platform === 'win32';
+const GH_BIN = IS_WINDOWS ? 'C:\\Program Files\\GitHub CLI\\gh.exe' : 'gh';
 
 /**
  * PRAgent
@@ -24,39 +25,55 @@ class PRAgent {
     // 1. Create and checkout feature branch
     await this._git(['checkout', '-b', branch], repoPath);
 
-    // 2. Stage all changes
+    // 2. Disable CRLF warnings
+    await this._git(['config', 'core.autocrlf', 'false'], repoPath);
+    await this._git(['config', 'core.safecrlf', 'false'], repoPath);
+
+    // 3. Stage all changes
     await this._git(['add', '-A'], repoPath);
 
-    // 3. Check if there's anything to commit
+    // 4. Commit only if there are uncommitted changes
+    // (if /push is called after /init with no new changes, we still want to push existing commits)
     const status = await this._git(['status', '--porcelain'], repoPath);
-    if (!status.trim()) {
-      throw new Error('Nothing to commit — no changes found in the repo.');
+    if (status.trim()) {
+      const commitMsg = `feat: ${taskText.slice(0, 72)}`;
+      await this._git(['commit', '-m', commitMsg], repoPath);
     }
 
-    // 4. Commit
-    const commitMsg = `feat: ${taskText.slice(0, 72)}`;
-    await this._git(['commit', '-m', commitMsg], repoPath);
+    // 5. Push — use token-authenticated URL so subprocess git can auth
+    const token = await this._ghToken(repoPath);
+    const originUrl = await this._git(['remote', 'get-url', 'origin'], repoPath).catch(() => '');
 
-    // 4. Push
-    await this._git(['push', 'origin', branch], repoPath);
+    // If no remote origin, create the GitHub repo first
+    if (!originUrl) {
+      const whoami = await this._run(GH_BIN, ['api', 'user', '--jq', '.login'], repoPath);
+      const username = whoami.trim();
+      const repoName = require('path').basename(repoPath).replace(/\s+/g, '-');
+      await this._run(GH_BIN, ['repo', 'create', repoName, '--public', '--source', '.'], repoPath).catch(() => {});
+      const cleanUrl = `https://github.com/${username}/${repoName}`;
+      await this._git(['remote', 'add', 'origin', cleanUrl], repoPath).catch(() =>
+        this._git(['remote', 'set-url', 'origin', cleanUrl], repoPath)
+      );
+    }
 
-    // 5. Try to open a PR via GitHub CLI
+    const finalOriginUrl = await this._git(['remote', 'get-url', 'origin'], repoPath);
+    const authUrl = token ? finalOriginUrl.replace('https://', `https://${token}@`) : finalOriginUrl;
+    await this._git(['remote', 'set-url', 'origin', authUrl], repoPath);
+    try {
+      await this._git(['push', '-u', 'origin', branch], repoPath);
+    } finally {
+      await this._git(['remote', 'set-url', 'origin', finalOriginUrl], repoPath).catch(() => {});
+    }
+
+    // 6. Try to open a PR via GitHub CLI
+    const prTitle = `feat: ${taskText.slice(0, 72)}`;
     let prUrl = null;
-    const ghAvailable = await this._commandExists('gh');
-    if (ghAvailable) {
-      try {
-        const prBody = `Automated PR created by WhatsApp agent.\n\nTask: ${taskText}`;
-        const out = await this._run(
-          IS_WINDOWS ? 'cmd' : 'gh',
-          IS_WINDOWS
-            ? ['/c', 'gh', 'pr', 'create', '--title', commitMsg, '--body', prBody, '--head', branch]
-            : ['pr', 'create', '--title', commitMsg, '--body', prBody, '--head', branch],
-          repoPath
-        );
-        prUrl = out.trim();
-      } catch {
-        // gh auth not set up — branch is pushed, PR creation skipped
-      }
+    try {
+      const prBody = `Automated PR created by WhatsApp agent.\n\nTask: ${taskText}`;
+      const out = await this._run(GH_BIN, ['pr', 'create', '--title', prTitle, '--body', prBody, '--head', branch], repoPath);
+      prUrl = out.trim();
+    } catch {
+      // gh not available or PR creation failed — branch is pushed, that's enough
     }
 
     return { branch, committed: true, pushed: true, prUrl };
@@ -96,6 +113,15 @@ class PRAgent {
       });
       proc.on('error', reject);
     });
+  }
+
+  async _ghToken(cwd) {
+    try {
+      const out = await this._run(GH_BIN, ['auth', 'token'], cwd);
+      return out.trim();
+    } catch {
+      return null;
+    }
   }
 
   async _commandExists(cmd) {

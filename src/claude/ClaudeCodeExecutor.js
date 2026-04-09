@@ -48,7 +48,7 @@ class ClaudeCodeExecutor {
    * @param {function} opts.onProgress     - Called with each streaming event
    * @returns {Promise<ExecutionResult>}
    */
-  async run(prompt, repoPath, { allowedTools, disallowedTools, onProgress } = {}) {
+  async run(prompt, repoPath, { allowedTools, disallowedTools, onProgress, model } = {}) {
     if (this.budgetExceeded) {
       throw new BudgetExceededError(this.budgetStatus);
     }
@@ -71,6 +71,9 @@ class ClaudeCodeExecutor {
       '--verbose',
     ];
 
+    if (model) {
+      args.push('--model', model);
+    }
     if (allowedTools?.length) {
       args.push('--allowedTools', allowedTools.join(','));
     }

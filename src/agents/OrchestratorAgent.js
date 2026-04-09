@@ -1,5 +1,9 @@
 const { randomUUID } = require('crypto');
+const { spawn } = require('child_process');
+const EventEmitter = require('events');
 const { BudgetExceededError } = require('../claude/ClaudeCodeExecutor');
+const { formatProgressMessage, formatStageCompletion, formatElapsed, getStageDuration } = require('../utils/StatusFormatter');
+const IS_WINDOWS = process.platform === 'win32';
 
 const MAX_RETRIES = 3;
 
@@ -32,7 +36,7 @@ const STATES = {
  * Budget exhaustion → PAUSED → user sends /resume → resumes from current stage
  * User sends /cancel → CANCELLED
  */
-class OrchestratorAgent {
+class OrchestratorAgent extends EventEmitter {
   /**
    * @param {object} agents
    * @param {import('./PlanningAgent').PlanningAgent}   agents.planning
@@ -44,6 +48,7 @@ class OrchestratorAgent {
    * @param {function(string, string): Promise<void>} notify  - send WhatsApp message to user
    */
   constructor(agents, notify) {
+    super();
     this._agents = agents;
     this._notify = notify;
     // taskId → task object
@@ -72,6 +77,7 @@ class OrchestratorAgent {
       lastTestOutput: '',
       planSteps: [],
       invocations: 0,
+      stageTiming: {},
     };
     this._tasks.set(taskId, task);
 
@@ -133,31 +139,32 @@ class OrchestratorAgent {
 
   async _run(task) {
     const { logging } = this._agents;
+    const TERMINAL = [STATES.PR_CREATED, STATES.FAILED, STATES.CANCELLED, STATES.PAUSED];
 
     try {
-      if (task.status === STATES.QUEUED || task.status === STATES.PLANNING) {
-        await this._stagePlanning(task);
-      }
-
-      if (task.status === STATES.CODING) {
-        await this._stageCoding(task);
-      }
-
-      // testing → debugging loop
-      while (
-        task.status === STATES.TESTING ||
-        task.status === STATES.DEBUGGING
-      ) {
-        if (task.status === STATES.TESTING) {
-          await this._stageTesting(task);
+      // Proper state-machine loop — handles review → re-coding → testing cycles correctly
+      while (!TERMINAL.includes(task.status)) {
+        switch (task.status) {
+          case STATES.QUEUED:
+          case STATES.PLANNING:
+            await this._stagePlanning(task);
+            break;
+          case STATES.CODING:
+            await this._stageCoding(task);
+            break;
+          case STATES.TESTING:
+            await this._stageTesting(task);
+            break;
+          case STATES.DEBUGGING:
+            await this._stageDebugging(task);
+            break;
+          case STATES.REVIEW:
+            await this._stageReview(task);
+            break;
+          default:
+            logging.log(task.taskId, 'ERROR', `Unknown state: ${task.status}`);
+            task.status = STATES.FAILED;
         }
-        if (task.status === STATES.DEBUGGING) {
-          await this._stageDebugging(task);
-        }
-      }
-
-      if (task.status === STATES.REVIEW) {
-        await this._stageReview(task);
       }
 
       if (task.status === STATES.PR_CREATED) {
@@ -171,28 +178,65 @@ class OrchestratorAgent {
         logging.log(task.taskId, 'WARN', 'Budget exhausted — task paused');
         await this._notify(
           task.userId,
-          `Task hit execution limit (${err.budget.current}/${err.budget.max}).\n` +
+          `⏸️ *Budget limit reached* (${err.budget.current}/${err.budget.max})\n` +
           `Stage: ${task._pausedAtStage}\n` +
-          `Reply /resume to grant 10 more, or /cancel to abort.`
+          `Reply /resume to grant 10 more invocations, or /cancel to abort.`
         );
       } else if (task.status !== STATES.CANCELLED) {
         task.status = STATES.FAILED;
         logging.log(task.taskId, 'ERROR', 'Task failed with error', { err: err.message });
-        await this._notify(task.userId, `Task FAILED: ${err.message}`);
+        await this._notify(task.userId, `❌ *Task FAILED*: ${err.message}\nUse /logs for the full trace.`);
         logging.endTask(task.taskId);
+        this._agents.metrics?.recordFailure(task.taskId, task.userId, err.message, task.retries, task.stageTiming);
       }
     }
   }
 
+  _isSimpleTask(taskText) {
+    const t = taskText.trim();
+    const wordCount = t.split(/\s+/).length;
+    if (wordCount > 12) return false;
+    return /^(add|fix|update|change|rename|delete|remove|create|move|replace|refactor|edit)\s/i.test(t);
+  }
+
+  async _getFileTree(repoPath) {
+    return new Promise((resolve) => {
+      const proc = spawn(
+        IS_WINDOWS ? 'cmd' : 'git',
+        IS_WINDOWS ? ['/c', 'git', 'ls-files', '--others', '--exclude-standard', '-c'] : ['ls-files', '--others', '--exclude-standard', '-c'],
+        { cwd: repoPath, shell: false }
+      );
+      let out = '';
+      proc.stdout?.on('data', d => (out += d));
+      proc.on('close', () => resolve(out.trim()));
+      proc.on('error', () => resolve(''));
+    });
+  }
+
   async _stagePlanning(task) {
     const { planning, logging } = this._agents;
-    this._transition(task, STATES.PLANNING);
+    this._transitionStage(task, STATES.PLANNING);
 
-    await this._notify(task.userId, `⏳ *Planning* your task...\nBudget: ${this._budgetStr()}`);
+    // Skip planning for short, direct tasks — go straight to coding
+    if (this._isSimpleTask(task.taskText)) {
+      logging.log(task.taskId, 'INFO', 'Simple task detected — skipping planning');
+      await this._notify(task.userId, `⚡ *Simple task — skipping planning*\n${formatProgressMessage(STATES.CODING, task, this._budgetStr())}`);
+      task.planSteps = [];
+      this._transitionStage(task, STATES.CODING);
+      return;
+    }
+
+    await this._notify(task.userId, formatProgressMessage(STATES.PLANNING, task, this._budgetStr()));
     logging.log(task.taskId, 'STATE', 'Entering planning stage');
 
-    const contextBlock = task.context?.getContextBlock(task.repoPath) ?? '';
-    const result = await planning.plan(contextBlock + task.taskText, task.repoPath, (e) =>
+    // Pre-fetch file tree and context in parallel to save time during planning
+    const [fileTree, contextBlock] = await Promise.all([
+      this._getFileTree(task.repoPath),
+      Promise.resolve(task.context?.getContextBlock(task.repoPath) ?? ''),
+    ]);
+
+    const fileTreeSection = fileTree ? `\nRepo files:\n${fileTree}\n\n` : '';
+    const result = await planning.plan(contextBlock + fileTreeSection + task.taskText, task.repoPath, (e) =>
       logging.log(task.taskId, 'DEBUG', 'planning event', { type: e.type })
     );
 
@@ -202,11 +246,13 @@ class OrchestratorAgent {
 
     task.planSteps = result.steps;
     logging.log(task.taskId, 'INFO', `Plan produced ${result.steps.length} steps`, { steps: result.steps });
+    const planningDuration = getStageDuration(task.stageTiming, STATES.PLANNING);
+    const planningTimeStr = planningDuration != null ? ` in ${formatElapsed(planningDuration)}` : '';
     await this._notify(
       task.userId,
-      `✅ *Planning complete* (${result.steps.length} steps)\n${result.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n⏳ *Starting coding...* Budget: ${this._budgetStr()}`
+      `✅ *Planning complete*${planningTimeStr} (${result.steps.length} steps)\n${result.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n${formatProgressMessage(STATES.CODING, task, this._budgetStr())}`
     );
-    this._transition(task, STATES.CODING);
+    this._transitionStage(task, STATES.CODING);
   }
 
   async _stageCoding(task) {
@@ -216,9 +262,8 @@ class OrchestratorAgent {
       ? `Task: ${task.taskText}\n\nImplementation steps:\n${task.planSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
       : task.taskText;
 
-    const retryNote = task.retries.coding > 0 ? ` (retry ${task.retries.coding})` : '';
     logging.log(task.taskId, 'STATE', 'Entering coding stage', { retry: task.retries.coding });
-    await this._notify(task.userId, `⏳ *Coding${retryNote}* — Claude Code is writing code...\nBudget: ${this._budgetStr()}`);
+    await this._notify(task.userId, formatProgressMessage(STATES.CODING, task, this._budgetStr()));
 
     const result = await execution.code(taskPrompt, task.repoPath, (e) =>
       logging.log(task.taskId, 'DEBUG', 'coding event', { type: e.type })
@@ -227,16 +272,16 @@ class OrchestratorAgent {
     logging.log(task.taskId, 'INFO', 'Coding complete', { success: result.success });
     await this._notify(
       task.userId,
-      `✅ *Coding complete*\n⏳ *Running tests...* Budget: ${this._budgetStr()}`
+      `${formatStageCompletion(STATES.CODING, task.stageTiming)}\n${formatProgressMessage(STATES.TESTING, task, this._budgetStr())}`
     );
-    this._transition(task, STATES.TESTING);
+    this._transitionStage(task, STATES.TESTING);
   }
 
   async _stageTesting(task) {
     const { execution, logging } = this._agents;
 
     logging.log(task.taskId, 'STATE', 'Entering testing stage');
-    await this._notify(task.userId, `⏳ *Testing* — running test suite...\nBudget: ${this._budgetStr()}`);
+    await this._notify(task.userId, formatProgressMessage(STATES.TESTING, task, this._budgetStr()));
 
     const result = await execution.test(task.repoPath, (e) =>
       logging.log(task.taskId, 'DEBUG', 'testing event', { type: e.type })
@@ -249,27 +294,30 @@ class OrchestratorAgent {
     });
 
     if (result.passed) {
+      const testingDuration = getStageDuration(task.stageTiming, STATES.TESTING);
+      const testingTimeStr = testingDuration != null ? ` in ${formatElapsed(testingDuration)}` : '';
       await this._notify(
         task.userId,
-        `✅ *Tests passed* (${result.passedCount}/${result.passedCount + result.failedCount})\n⏳ *Starting review...* Budget: ${this._budgetStr()}`
+        `✅ *Tests passed*${testingTimeStr} (${result.passedCount}/${result.passedCount + result.failedCount})\n${formatProgressMessage(STATES.REVIEW, task, this._budgetStr())}`
       );
-      this._transition(task, STATES.REVIEW);
+      this._transitionStage(task, STATES.REVIEW);
     } else {
       if (task.retries.debugging >= MAX_RETRIES) {
         task.status = STATES.FAILED;
         await this._notify(
           task.userId,
-          `❌ *Task FAILED* after ${MAX_RETRIES} debug attempts.\nError: ${result.details}\nReply /resume to retry or /logs for full trace.`
+          `❌ *Task FAILED* after ${MAX_RETRIES} debug attempts.\nError: ${result.details}\nUse /logs for full trace.`
         );
         this._agents.logging.endTask(task.taskId);
+        this._agents.metrics?.recordFailure(task.taskId, task.userId, `Max debug retries (${MAX_RETRIES})`, task.retries, task.stageTiming);
         return;
       }
       task.retries.debugging += 1;
       await this._notify(
         task.userId,
-        `⚠️ *Tests failed* (${result.failedCount} failing)\n⏳ *Debugging* attempt ${task.retries.debugging}/${MAX_RETRIES}...\nBudget: ${this._budgetStr()}`
+        `⚠️ *Tests failed* (${result.failedCount} failing)\n${formatProgressMessage(STATES.DEBUGGING, task, this._budgetStr())}\nAttempt ${task.retries.debugging}/${MAX_RETRIES}`
       );
-      this._transition(task, STATES.DEBUGGING);
+      this._transitionStage(task, STATES.DEBUGGING);
     }
   }
 
@@ -277,7 +325,7 @@ class OrchestratorAgent {
     const { debugging, logging } = this._agents;
 
     logging.log(task.taskId, 'STATE', 'Entering debugging stage', { attempt: task.retries.debugging });
-    await this._notify(task.userId, `⏳ *Debugging* — applying fix...\nBudget: ${this._budgetStr()}`);
+    await this._notify(task.userId, formatProgressMessage(STATES.DEBUGGING, task, this._budgetStr()));
 
     const result = await debugging.fix(
       task.taskText,
@@ -290,16 +338,16 @@ class OrchestratorAgent {
     logging.log(task.taskId, 'INFO', 'Debug patch applied', { success: result.success });
     await this._notify(
       task.userId,
-      `✅ *Patch applied*\n⏳ *Re-running tests...* Budget: ${this._budgetStr()}`
+      `${formatStageCompletion(STATES.DEBUGGING, task.stageTiming)}\n${formatProgressMessage(STATES.TESTING, task, this._budgetStr())}`
     );
-    this._transition(task, STATES.TESTING);
+    this._transitionStage(task, STATES.TESTING);
   }
 
   async _stageReview(task) {
     const { review, logging } = this._agents;
 
     logging.log(task.taskId, 'STATE', 'Entering review stage', { retry: task.retries.review });
-    await this._notify(task.userId, `⏳ *Reviewing code* — checking diff for issues...\nBudget: ${this._budgetStr()}`);
+    await this._notify(task.userId, formatProgressMessage(STATES.REVIEW, task, this._budgetStr()));
 
     const result = await review.review(task.repoPath, (e) =>
       logging.log(task.taskId, 'DEBUG', 'review event', { type: e.type })
@@ -308,26 +356,29 @@ class OrchestratorAgent {
     logging.log(task.taskId, 'INFO', `Review: ${result.verdict}`, { reasons: result.reasons });
 
     if (result.passed) {
-      await this._notify(task.userId, `✅ *Review passed*\n⏳ *Creating PR...* Budget: ${this._budgetStr()}`);
+      const reviewDuration = getStageDuration(task.stageTiming, STATES.REVIEW);
+      const reviewTimeStr = reviewDuration != null ? ` in ${formatElapsed(reviewDuration)}` : '';
+      await this._notify(task.userId, `✅ *Review passed*${reviewTimeStr}\n${formatProgressMessage(STATES.PR_CREATED, task, this._budgetStr())}`);
       await this._stagePR(task);
     } else {
       if (task.retries.review >= 1) {
         task.status = STATES.FAILED;
         await this._notify(
           task.userId,
-          `Review FAILED after retry.\nReasons: ${result.reasons}\nUse /logs for details.`
+          `❌ *Review FAILED* after retry.\nReasons: ${result.reasons}\nUse /logs for details.`
         );
         this._agents.logging.endTask(task.taskId);
+        this._agents.metrics?.recordFailure(task.taskId, task.userId, `Review failed: ${result.reasons}`, task.retries, task.stageTiming);
         return;
       }
       task.retries.review += 1;
       task.retries.coding += 1;
       await this._notify(
         task.userId,
-        `Review: FAIL. Reasons: ${result.reasons}\nRetrying coding stage. Budget: ${this._budgetStr()}`
+        `⚠️ *Review failed*. Reasons: ${result.reasons}\nRetrying coding stage. Budget: ${this._budgetStr()}`
       );
-      this._transition(task, STATES.CODING);
-      await this._stageCoding(task);
+      this._transitionStage(task, STATES.CODING);
+      // Main state-machine loop will handle CODING → TESTING → REVIEW
     }
   }
 
@@ -337,23 +388,27 @@ class OrchestratorAgent {
 
     try {
       const result = await pr.createPR(task.taskId, task.taskText, task.repoPath);
-      this._transition(task, STATES.PR_CREATED);
+      this._transitionStage(task, STATES.PR_CREATED);
 
       const prLine = result.prUrl
         ? `PR: ${result.prUrl}`
         : `Branch pushed: ${result.branch} (run \`gh pr create\` to open PR)`;
 
-      const completionMsg = `🎉 *Task complete!*\nBranch: \`${result.branch}\`\n${prLine}\nBudget used: ${this._budgetStr()}`;
+      const taskStart = task.stageTiming.planningStart ?? task.stageTiming.codingStart;
+      const totalTimeStr = taskStart ? ` in ${formatElapsed(Date.now() - taskStart)}` : '';
+      const completionMsg = `🎉 *Task complete${totalTimeStr}!*\nBranch: \`${result.branch}\`\n${prLine}\nBudget used: ${this._budgetStr()}`;
       task.context?.append(task.repoPath, 'assistant', `Task completed: ${task.taskText}`);
       await this._notify(task.userId, completionMsg);
+      this._agents.metrics?.recordSuccess(task.taskId, task.userId, task.retries, task.stageTiming);
     } catch (err) {
       logging.log(task.taskId, 'WARN', 'PR creation failed', { err: err.message });
-      this._transition(task, STATES.PR_CREATED);
+      this._transitionStage(task, STATES.PR_CREATED);
       await this._notify(
         task.userId,
         `Task complete! Code changes are in: ${task.repoPath}\n` +
         `PR creation failed: ${err.message}\nCommit and push manually if needed.`
       );
+      this._agents.metrics?.recordSuccess(task.taskId, task.userId, task.retries, task.stageTiming);
     }
 
     this._agents.logging.endTask(task.taskId);
@@ -361,10 +416,36 @@ class OrchestratorAgent {
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
-  _transition(task, newState) {
+  _transitionStage(task, newState) {
     const prev = task.status;
+    const now = Date.now();
+
+    // Record end time for the stage we are leaving
+    if (prev && prev !== STATES.QUEUED) {
+      const endKey = `${prev}End`;
+      if (task.stageTiming[endKey] == null) {
+        task.stageTiming[endKey] = now;
+      }
+    }
+
+    // Record start time for the stage we are entering
+    const startKey = `${newState}Start`;
+    if (task.stageTiming[startKey] == null) {
+      task.stageTiming[startKey] = now;
+    }
+
     task.status = newState;
     this._agents.logging.log(task.taskId, 'STATE', `${prev} → ${newState}`);
+
+    this.emit('stageChanged', {
+      taskId:        task.taskId,
+      userId:        task.userId,
+      stage:         newState,
+      previousStage: prev,
+      timestamp:     now,
+      retries:       { ...task.retries },
+      stageTiming:   { ...task.stageTiming },
+    });
   }
 
   _budgetStr() {
@@ -387,12 +468,13 @@ class OrchestratorAgent {
 
   _snapshot(task) {
     return {
-      taskId:    task.taskId,
-      status:    task.status,
-      repo:      task.repoPath,
-      taskText:  task.taskText,
-      retries:   task.retries,
+      taskId:      task.taskId,
+      status:      task.status,
+      repo:        task.repoPath,
+      taskText:    task.taskText,
+      retries:     task.retries,
       invocations: this._agents.executor.budgetStatus.current,
+      stageTiming: { ...task.stageTiming },
     };
   }
 }

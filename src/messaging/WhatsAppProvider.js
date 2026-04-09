@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { MessagingLayer } = require('./MessagingLayer');
 
-const AUTH_PATH = path.resolve('./.wwebjs_auth_stable');
+const AUTH_PATH = path.resolve('./.wwebjs_auth_business');
 
 /**
  * WhatsApp implementation of MessagingLayer via whatsapp-web.js.
@@ -57,44 +57,15 @@ class WhatsAppProvider extends MessagingLayer {
       console.warn('[WhatsApp] Disconnected:', reason);
     });
 
-    // message_create fires for ALL messages including ones you send to yourself.
-    // message only fires for incoming messages from others.
-    // We use message_create so the user can control the bot by messaging themselves.
-    // message_create fires for all messages including self-messages (personal number setup).
-    // message only fires for incoming from others (Business number setup).
-    // We handle both and filter correctly by origin.
-    // Personal number setup: user messages themselves.
-    // Only process message_create where:
-    //   - sent by the user (fromMe=true)
-    //   - sent TO the @lid (the linked device = self-chat only)
-    // This ensures messages to OTHER people never reach the bot.
-    this._client.on('message_create', (msg) => {
-      if (!this._messageCallback) return;
-      if (msg.type !== 'chat') return;
-      if (!msg.fromMe) return;
-      // Only self-messages: sent by user's phone (@c.us) TO their own linked device (@lid)
-      if (!msg.from.endsWith('@c.us')) return;  // ignore bot responses (from @lid)
-      if (!msg.to.endsWith('@lid')) return;      // ignore messages to other contacts
-
-      const userId = msg.from;
-      console.log(`[WhatsApp] Self-message from ${userId}: "${msg.body?.slice(0, 60)}"`);
-
-      this._messageCallback({
-        userId,
-        text: msg.body.trim(),
-        receivedAt: new Date(msg.timestamp * 1000),
-        _raw: msg,
-      });
-    });
-
     // Business number setup: incoming messages from other people.
-    // fromMe=false means someone else sent this — safe, no self-loop risk.
+    // fromMe=false means someone else sent this — no self-loop risk.
     this._client.on('message', (msg) => {
       if (!this._messageCallback) return;
       if (msg.type !== 'chat') return;
-      if (msg.fromMe) return; // handled above
+      if (msg.fromMe) return;
 
-      const userId = msg.from;
+      // Use the @c.us ID for sending replies if available, fall back to msg.from
+      const userId = msg.author || msg.from;
       console.log(`[WhatsApp] Incoming from ${userId}: "${msg.body?.slice(0, 60)}"`);
 
       this._messageCallback({
