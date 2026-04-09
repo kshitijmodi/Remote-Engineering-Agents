@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { WhatsAppProvider } = require('./src/messaging/WhatsAppProvider');
 const { CommunicationAgent } = require('./src/agents/CommunicationAgent');
 const { ClaudeCodeExecutor } = require('./src/claude/ClaudeCodeExecutor');
@@ -9,6 +10,7 @@ const { ReviewAgent } = require('./src/agents/ReviewAgent');
 const { PRAgent } = require('./src/agents/PRAgent');
 const { LoggingAgent } = require('./src/agents/LoggingAgent');
 const { OrchestratorAgent } = require('./src/agents/OrchestratorAgent');
+const { ContextAgent } = require('./src/agents/ContextAgent');
 const fs = require('fs');
 const path = require('path');
 
@@ -38,6 +40,7 @@ async function main() {
   });
   const repoAgent = new RepoAgent();
   const logging   = new LoggingAgent();
+  const context   = new ContextAgent();
 
   // Specialist agents
   const planning  = new PlanningAgent(executor);
@@ -130,11 +133,17 @@ async function main() {
         repoPath = null;
       }
       const target = repoPath || process.cwd();
+      const contextBlock = target ? context.getContextBlock(target) : '';
       try {
-        const result = await executor.run(question, target, {
+        const result = await executor.run(contextBlock + question, target, {
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
         });
-        await reliableSend(userId, result.output || 'No response.');
+        const answer = result.output || 'No response.';
+        if (target) {
+          context.append(target, 'user', question);
+          context.append(target, 'assistant', answer);
+        }
+        await reliableSend(userId, answer);
       } catch (err) {
         await reliableSend(userId, `Error: ${err.message}`);
       }
@@ -153,8 +162,9 @@ async function main() {
         return;
       }
 
+      context.append(repoPath, 'user', taskText);
       const release = repoAgent.acquireLock(userId);
-      const taskId  = orchestrator.startTask(userId, taskText, repoPath);
+      const taskId  = orchestrator.startTask(userId, taskText, repoPath, context);
       await reliableSend(userId, `Task accepted (${taskId}). Starting planner... Budget: 0/15`);
 
       const interval = setInterval(() => {
@@ -255,6 +265,18 @@ async function main() {
     onRepo: async (userId) => {
       const repoName = repoAgent.getActiveRepo(userId);
       await reliableSend(userId, repoName ? `Active repo: *${repoName}*` : 'No active repo set.');
+    },
+
+    onClearContext: async (userId) => {
+      let repoPath;
+      try {
+        repoPath = repoAgent.getActiveRepoPath(userId);
+      } catch {
+        await reliableSend(userId, 'No active repo to clear context for.');
+        return;
+      }
+      context.clear(repoPath);
+      await reliableSend(userId, 'Context cleared for this repo.');
     },
   });
 

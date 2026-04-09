@@ -59,13 +59,14 @@ class OrchestratorAgent {
    * @param {string} repoPath
    * @returns {string} taskId
    */
-  startTask(userId, taskText, repoPath) {
+  startTask(userId, taskText, repoPath, context = null) {
     const taskId = randomUUID().slice(0, 8);
     const task = {
       taskId,
       userId,
       taskText,
       repoPath,
+      context,
       status: STATES.QUEUED,
       retries: { coding: 0, debugging: 0, review: 0 },
       lastTestOutput: '',
@@ -190,7 +191,8 @@ class OrchestratorAgent {
     await this._notify(task.userId, `⏳ *Planning* your task...\nBudget: ${this._budgetStr()}`);
     logging.log(task.taskId, 'STATE', 'Entering planning stage');
 
-    const result = await planning.plan(task.taskText, task.repoPath, (e) =>
+    const contextBlock = task.context?.getContextBlock(task.repoPath) ?? '';
+    const result = await planning.plan(contextBlock + task.taskText, task.repoPath, (e) =>
       logging.log(task.taskId, 'DEBUG', 'planning event', { type: e.type })
     );
 
@@ -341,10 +343,9 @@ class OrchestratorAgent {
         ? `PR: ${result.prUrl}`
         : `Branch pushed: ${result.branch} (run \`gh pr create\` to open PR)`;
 
-      await this._notify(
-        task.userId,
-        `🎉 *Task complete!*\nBranch: \`${result.branch}\`\n${prLine}\nBudget used: ${this._budgetStr()}`
-      );
+      const completionMsg = `🎉 *Task complete!*\nBranch: \`${result.branch}\`\n${prLine}\nBudget used: ${this._budgetStr()}`;
+      task.context?.append(task.repoPath, 'assistant', `Task completed: ${task.taskText}`);
+      await this._notify(task.userId, completionMsg);
     } catch (err) {
       logging.log(task.taskId, 'WARN', 'PR creation failed', { err: err.message });
       this._transition(task, STATES.PR_CREATED);
