@@ -1,3 +1,5 @@
+const { formatStageCompletion } = require('../utils/StatusFormatter');
+
 /**
  * CommunicationAgent
  *
@@ -7,6 +9,7 @@
  *   2. Slash command parsing — routes /connect, /switch, /resume, /cancel, /logs
  *   3. Natural language task routing — passes free-text to the orchestrator
  *   4. Sending responses back to the user
+ *   5. Forwarding orchestrator stageChanged events as formatted WhatsApp updates
  */
 class CommunicationAgent {
   /**
@@ -35,6 +38,24 @@ class CommunicationAgent {
   }
 
   /**
+   * Subscribe to stageChanged events from an OrchestratorAgent instance.
+   * Sends a formatted completion summary to the user whenever a pipeline stage finishes.
+   * @param {import('./OrchestratorAgent').OrchestratorAgent} orchestrator
+   */
+  attachOrchestrator(orchestrator) {
+    orchestrator.on('stageChanged', ({ userId, previousStage, stageTiming, retries }) => {
+      // Only notify for meaningful stage completions (skip queued/failed/cancelled/paused)
+      const reportableStages = ['planning', 'coding', 'testing', 'debugging', 'review'];
+      if (!reportableStages.includes(previousStage)) return;
+
+      const msg = formatStageCompletion(previousStage, stageTiming);
+      this.send(userId, msg).catch((err) => {
+        console.error('[CommunicationAgent] Failed to send stageChanged update:', err.message);
+      });
+    });
+  }
+
+  /**
    * Send a message back to a user.
    * @param {string} userId
    * @param {string} text
@@ -49,6 +70,7 @@ class CommunicationAgent {
     const { userId, text } = msg;
 
     // 1. Auth — silently ignore unauthorized senders
+    console.log(`[CommunicationAgent] Message from ${userId}, allowed: ${this._allowed.has(userId)}, whitelist: ${[...this._allowed].join(',')}`);
     if (!this._allowed.has(userId)) return;
 
     // 2. Parse slash commands

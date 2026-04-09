@@ -9,6 +9,7 @@ const { DebuggingAgent } = require('./src/agents/DebuggingAgent');
 const { ReviewAgent } = require('./src/agents/ReviewAgent');
 const { PRAgent } = require('./src/agents/PRAgent');
 const { LoggingAgent } = require('./src/agents/LoggingAgent');
+const { MetricsAgent } = require('./src/agents/MetricsAgent');
 const { OrchestratorAgent } = require('./src/agents/OrchestratorAgent');
 const { ContextAgent } = require('./src/agents/ContextAgent');
 const fs = require('fs');
@@ -40,6 +41,7 @@ async function main() {
   });
   const repoAgent = new RepoAgent();
   const logging   = new LoggingAgent();
+  const metrics   = new MetricsAgent();
   const context   = new ContextAgent();
 
   // Specialist agents
@@ -72,7 +74,7 @@ async function main() {
 
   // Orchestrator
   const orchestrator = new OrchestratorAgent(
-    { planning, execution, debugging, review, pr, logging, executor },
+    { planning, execution, debugging, review, pr, logging, executor, metrics },
     reliableSend
   );
 

@@ -238,11 +238,9 @@ class RepoAgent {
 
   _ghRun(args, cwd) {
     const IS_WINDOWS = process.platform === 'win32';
-    const [bin, binArgs] = IS_WINDOWS
-      ? ['cmd', ['/c', 'gh', ...args]]
-      : ['gh', args];
+    const GH_BIN = IS_WINDOWS ? 'C:\\Program Files\\GitHub CLI\\gh.exe' : 'gh';
     return new Promise((resolve, reject) => {
-      const proc = spawn(bin, binArgs, { cwd, shell: false });
+      const proc = spawn(GH_BIN, args, { cwd, shell: false });
       let out = '';
       let err = '';
       proc.stdout?.on('data', d => (out += d));

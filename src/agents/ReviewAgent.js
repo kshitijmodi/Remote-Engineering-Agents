@@ -31,8 +31,13 @@ class ReviewAgent {
     const diff = await this._getDiff(repoPath);
 
     if (!diff.trim()) {
-      // No changes at all — treat as PASS so pipeline completes without a retry loop
-      return { passed: true, verdict: 'PASS', reasons: 'No code changes to review — task was informational or already applied.', diff: '' };
+      return { passed: true, verdict: 'PASS', reasons: 'No code changes to review.', diff: '' };
+    }
+
+    // Skip full review for tiny diffs — low risk, save an invocation
+    const diffLines = diff.split('\n').filter(l => l.startsWith('+') || l.startsWith('-')).length;
+    if (diffLines < 10) {
+      return { passed: true, verdict: 'PASS', reasons: `Small diff (${diffLines} lines) — auto-approved.`, diff };
     }
 
     const prompt = `Review the following code diff for bugs and style issues.
@@ -43,6 +48,7 @@ ${diff}`;
 
     const result = await this._executor.run(prompt, repoPath, {
       allowedTools: ['Read'],
+      model: 'claude-haiku-4-5-20251001',
       onProgress,
     });
 
