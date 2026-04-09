@@ -44,6 +44,17 @@ Replace with your own WhatsApp number in the format `<countrycode><number>@c.us`
 
 ### 4. Start the Bot
 
+Install pm2 for automatic restart on crash and laptop reboot:
+
+```bash
+npm install -g pm2
+pm2 start index.js --name rea
+pm2 startup   # follow the printed command to auto-start on boot
+pm2 save
+```
+
+Or run directly (no auto-restart):
+
 ```bash
 node index.js
 ```
@@ -148,14 +159,34 @@ review
 
 ## Slash Commands
 
+**Workspace**
 | Command | Action |
 |---|---|
-| `/connect <repo-url>` | Clone repo and set as active workspace |
-| `/switch <repo-name>` | Switch active workspace |
-| `/repo` | Show the currently active repo name (persists across restarts) |
-| `/resume` | Grant 10 more Claude Code invocations and continue paused task |
-| `/cancel` | Abort current task |
-| `/logs` | Return latest log output for active task |
+| `/init "<local-path>"` | Set a local folder as active workspace |
+| `/connect <repo-url>` | Clone a GitHub repo and set as active workspace |
+| `/switch <repo-name>` | Switch between registered workspaces |
+| `/list` | Show all registered workspaces |
+| `/repo` | Show currently active workspace |
+
+**Tasks**
+| Command | Action |
+|---|---|
+| `/push [branch]` | Commit and push changes to GitHub, open PR |
+| `/cancel` | Abort the running task |
+| `/resume` | Extend budget by 10 invocations and continue a paused task |
+| `/logs` | Show recent task logs |
+
+**Bot Control**
+| Command | Action |
+|---|---|
+| `/restart` | Gracefully restart the bot (auto-restarts via pm2) |
+| `/stop` | Gracefully stop the bot |
+
+**Other**
+| Command | Action |
+|---|---|
+| `/clear-context` | Reset conversation history for the active repo |
+| `/help` | Show all available commands |
 
 ---
 

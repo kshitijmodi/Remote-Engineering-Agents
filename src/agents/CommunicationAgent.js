@@ -70,8 +70,8 @@ class CommunicationAgent {
     const { userId, text } = msg;
 
     // 1. Auth — silently ignore unauthorized senders
-    console.log(`[CommunicationAgent] Message from ${userId}, allowed: ${this._allowed.has(userId)}, whitelist: ${[...this._allowed].join(',')}`);
     if (!this._allowed.has(userId)) return;
+    console.log(`[CommunicationAgent] Message from ${userId}: "${text.slice(0, 60)}..."`);
 
     // 2. Parse slash commands
     if (text.startsWith('/')) {
@@ -166,8 +166,44 @@ class CommunicationAgent {
         this._handlers.onClearContext?.(userId);
         break;
 
+      case '/list':
+        this._handlers.onList?.(userId);
+        break;
+
+      case '/restart':
+        this._handlers.onRestart?.(userId);
+        break;
+
+      case '/stop':
+        this._handlers.onStop?.(userId);
+        break;
+
+      case '/help':
+        await this.send(userId,
+          `*Available Commands:*\n\n` +
+          `*Workspace*\n` +
+          `/init "<local-path>" — set a local folder as active workspace\n` +
+          `/connect <repo-url> — clone a GitHub repo and set as active workspace\n` +
+          `/switch <repo-name> — switch between registered workspaces\n` +
+          `/list — show all registered workspaces\n` +
+          `/repo — show currently active workspace\n\n` +
+          `*Tasks*\n` +
+          `Just type naturally — e.g. "Add a dark mode toggle"\n` +
+          `/push [branch-name] — commit and push changes to GitHub\n` +
+          `/cancel — cancel the running task\n` +
+          `/resume — extend budget by 10 and continue a paused task\n` +
+          `/logs — show recent task logs\n\n` +
+          `*Bot Control*\n` +
+          `/restart — gracefully restart the bot (requires pm2)\n` +
+          `/stop — gracefully stop the bot\n\n` +
+          `*Other*\n` +
+          `/clear-context — reset conversation history for this repo\n` +
+          `/help — show this message`
+        );
+        break;
+
       default:
-        await this.send(userId, `Unknown command: ${command}\nAvailable: /init, /connect, /switch, /push, /resume, /cancel, /logs, /repo, /clear-context`);
+        await this.send(userId, `Unknown command: ${command}\nSend /help to see all available commands.`);
     }
   }
 }
