@@ -258,11 +258,15 @@ review
 |---|---|
 | **Communication Agent** | WhatsApp send/receive, whitelist auth, slash command parsing |
 | **Orchestration Agent** | State machine, routing between agents |
+| **ContextAgent** | Gathers and maintains repository/task context for other agents |
+| **IntentAgent** | Classifies free-text messages into TASK, QUESTION, STATUS, or PUSH intents |
 | **Planning Agent** | Breaks task into steps using Claude Code CLI |
 | **Execution Agent** | Runs Claude Code for feature implementation + tests |
 | **Debugging Agent** | Iterative fix loop via Claude Code calls |
 | **Review Agent** | Runs Claude Code with diff review prompt, returns PASS/FAIL |
 | **Repo Agent** | Clones repos, manages `/workspace` isolation, handles `/connect` and `/switch` |
+| **MetricsAgent** | Tracks invocation counts, retry counts, and task success/failure metrics |
+| **PRAgent** | Creates branches, commits, and opens GitHub PRs via git + gh CLI |
 | **Logging Agent** | Structured logs, 2-min checkpoints, `/logs` command |
 
 ---
