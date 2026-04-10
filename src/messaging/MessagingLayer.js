@@ -58,6 +58,35 @@ class MessagingLayer {
  * @property {string} userId   - Unique ID for this user (e.g. WhatsApp number)
  * @property {string} text     - Raw message text
  * @property {Date}   receivedAt
+ * @property {boolean} isConfirmation  - true if text is a /confirm or /cancel command
+ * @property {string|null} confirmationAction  - 'confirm' | 'cancel' | null
  */
 
-module.exports = { MessagingLayer };
+/**
+ * Parses a raw message text and returns confirmation metadata.
+ * Recognized commands (case-insensitive, leading slash):
+ *   /confirm  — user approves the proposed plan
+ *   /cancel   — user rejects the proposed plan
+ *
+ * @param {string} text
+ * @returns {{ isConfirmation: boolean, confirmationAction: string|null }}
+ */
+function parseConfirmationCommand(text) {
+  if (typeof text !== 'string') {
+    return { isConfirmation: false, confirmationAction: null };
+  }
+
+  const trimmed = text.trim().toLowerCase();
+
+  if (trimmed === '/confirm') {
+    return { isConfirmation: true, confirmationAction: 'confirm' };
+  }
+
+  if (trimmed === '/cancel') {
+    return { isConfirmation: true, confirmationAction: 'cancel' };
+  }
+
+  return { isConfirmation: false, confirmationAction: null };
+}
+
+module.exports = { MessagingLayer, parseConfirmationCommand };

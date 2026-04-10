@@ -12,6 +12,8 @@ const { LoggingAgent } = require('./src/agents/LoggingAgent');
 const { MetricsAgent } = require('./src/agents/MetricsAgent');
 const { OrchestratorAgent } = require('./src/agents/OrchestratorAgent');
 const { ContextAgent } = require('./src/agents/ContextAgent');
+const { IntentAgent } = require('./src/agents/IntentAgent');
+const { formatStepInProgress } = require('./src/utils/StatusFormatter');
 const fs = require('fs');
 const path = require('path');
 
@@ -36,6 +38,7 @@ async function main() {
   const messaging = new WhatsAppProvider();
   const executor  = new ClaudeCodeExecutor({
     maxInvocations: 15,
+    timeoutMs: 600_000,  // 10 min — complex coding tasks regularly exceed the old 5 min default
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
   });
@@ -43,6 +46,7 @@ async function main() {
   const logging   = new LoggingAgent();
   const metrics   = new MetricsAgent();
   const context   = new ContextAgent();
+  const intent    = new IntentAgent();
 
   // Specialist agents
   const planning  = new PlanningAgent(executor);
@@ -50,6 +54,19 @@ async function main() {
   const debugging = new DebuggingAgent(executor);
   const review    = new ReviewAgent(executor);
   const pr        = new PRAgent();
+
+  // ── Phase 2: inject step-start progress updates via ExecutionAgent EventEmitter ──
+  // 'stepStart' is not handled in the orchestrator callback, so we wire it here
+  // to send "starting step X/Y" messages before the orchestrator sends "step X done".
+  execution.on('stepStart', ({ step, totalSteps }) => {
+    for (const userId of ALLOWED_NUMBERS) {
+      const task = orchestrator.getActiveTask(userId);
+      if (task && task.status === 'coding') {
+        reliableSend(userId, formatStepInProgress(step, totalSteps)).catch(() => {});
+        break;
+      }
+    }
+  });
 
   // Forward-declared so orchestrator notify can use it
   let commAgent;
@@ -96,6 +113,23 @@ async function main() {
         }
       } catch { /* malformed checkpoint — skip */ }
     }
+  }
+
+  // LLM-based intent classifier — replaces regex heuristics in CommunicationAgent
+  async function classifyIntent(userId, text) {
+    let contextBlock = '';
+    let activeStatus = null;
+    let hasActiveRepo = false;
+    try {
+      const repoPath = repoAgent.getActiveRepoPath(userId);
+      hasActiveRepo = true;
+      contextBlock = context.getContextBlock(repoPath);
+    } catch { /* no active repo */ }
+    const task = orchestrator.getActiveTask(userId);
+    if (task && !['pr_created', 'failed', 'cancelled'].includes(task.status)) {
+      activeStatus = task.status;
+    }
+    return intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
   }
 
   // Communication agent
@@ -211,6 +245,20 @@ async function main() {
       }
     },
 
+    onConfirm: async (userId) => {
+      const result = orchestrator.handleConfirmationResponse(userId, 'confirm');
+      if (!result.handled) {
+        await reliableSend(userId, 'No plan awaiting confirmation.');
+      }
+    },
+
+    onModify: async (userId, modText) => {
+      const result = orchestrator.handleConfirmationResponse(userId, 'modify', { modification: modText });
+      if (!result.handled) {
+        await reliableSend(userId, 'No plan awaiting modification.');
+      }
+    },
+
     onResume: async (userId) => {
       executor.extendBudget(10);
       await reliableSend(
@@ -221,8 +269,13 @@ async function main() {
     },
 
     onCancel: async (userId) => {
-      orchestrator.cancelTask(userId);
-      await reliableSend(userId, 'Task cancelled.');
+      // If a plan is awaiting confirmation, resolve it as cancelled without aborting the whole task state
+      const result = orchestrator.handleConfirmationResponse(userId, 'cancel');
+      if (!result.handled) {
+        // No pending confirmation — cancel the running task entirely
+        orchestrator.cancelTask(userId);
+        await reliableSend(userId, 'Task cancelled.');
+      }
     },
 
     onPush: async (userId, branchName) => {
@@ -298,7 +351,7 @@ async function main() {
       await messaging.disconnect().catch(() => {});
       setTimeout(() => process.exit(0), 1000);
     },
-  });
+  }, classifyIntent);
 
   commAgent.start();
 

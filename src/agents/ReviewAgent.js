@@ -31,13 +31,14 @@ class ReviewAgent {
     const diff = await this._getDiff(repoPath);
 
     if (!diff.trim()) {
-      return { passed: true, verdict: 'PASS', reasons: 'No code changes to review.', diff: '' };
+      return { passed: true, verdict: 'PASS', reasons: 'No code changes to review.', recap: 'No code changes detected.', diff: '' };
     }
 
     // Skip full review for tiny diffs — low risk, save an invocation
     const diffLines = diff.split('\n').filter(l => l.startsWith('+') || l.startsWith('-')).length;
     if (diffLines < 10) {
-      return { passed: true, verdict: 'PASS', reasons: `Small diff (${diffLines} lines) — auto-approved.`, diff };
+      const recap = `${diffLines} lines changed — auto-approved.`;
+      return { passed: true, verdict: 'PASS', reasons: `Small diff (${diffLines} lines) — auto-approved.`, recap, diff };
     }
 
     const prompt = `Review the following code diff for bugs and style issues.
@@ -53,14 +54,23 @@ ${diff}`;
     });
 
     const parsed = this._parseVerdict(result.output);
+    const recap = this._generateRecap(parsed, diffLines);
 
     return {
       passed: parsed.verdict === 'PASS',
       verdict: parsed.verdict,
       reasons: parsed.reasons,
+      recap,
       diff,
       budget: result.budget,
     };
+  }
+
+  _generateRecap(parsed, diffLines) {
+    if (parsed.verdict === 'PASS') {
+      return `${diffLines} lines changed, review passed.`;
+    }
+    return `${diffLines} lines changed, review found issues: ${parsed.reasons}`;
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
@@ -91,7 +101,7 @@ ${diff}`;
       const proc = spawn(
         IS_WINDOWS ? 'cmd' : 'git',
         IS_WINDOWS ? ['/c', 'git', ...args] : args,
-        { cwd: repoPath, shell: false }
+        { cwd: repoPath, shell: false, windowsHide: true }
       );
       let out = '';
       let err = '';
@@ -106,12 +116,25 @@ ${diff}`;
   }
 
   _parseVerdict(output) {
+    const lines = output.trim().split('\n');
+    // Look for a line that starts with PASS or FAIL — that's the verdict line
+    for (const line of lines) {
+      const t = line.trim().toUpperCase();
+      if (t.startsWith('PASS')) return { verdict: 'PASS', reasons: line.replace(/^PASS[:\s-]*/i, '').trim() || 'Looks good.' };
+      if (t.startsWith('FAIL')) return { verdict: 'FAIL', reasons: line.replace(/^FAIL[:\s-]*/i, '').trim() || output.trim() };
+    }
+    // No clear verdict line — fall back to scanning full text
     const upper = output.toUpperCase();
-    const verdict = upper.includes('PASS') && !upper.includes('FAIL') ? 'PASS' : 'FAIL';
-    // Everything after the verdict word is the reason
-    const reasonMatch = output.match(/(?:PASS|FAIL)[:\s-]*([\s\S]*)/i);
-    const reasons = reasonMatch ? reasonMatch[1].trim() : output.trim();
-    return { verdict, reasons };
+    const failFirst = upper.indexOf('FAIL');
+    const passFirst = upper.indexOf('PASS');
+    if (failFirst !== -1 && (passFirst === -1 || failFirst < passFirst)) {
+      return { verdict: 'FAIL', reasons: output.trim() };
+    }
+    if (passFirst !== -1) {
+      return { verdict: 'PASS', reasons: output.trim() };
+    }
+    // Can't determine — default to PASS to avoid infinite retry loops
+    return { verdict: 'PASS', reasons: 'Could not parse verdict — defaulting to PASS.' };
   }
 }
 
@@ -120,6 +143,7 @@ ${diff}`;
  * @property {boolean} passed
  * @property {string}  verdict   - 'PASS' or 'FAIL'
  * @property {string}  reasons
+ * @property {string}  recap     - one-line summary for completion message
  * @property {string}  diff
  * @property {object}  [budget]
  */

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 /**
  * ExecutionAgent
@@ -11,24 +12,38 @@ const path = require('path');
  * 3. Returns a structured result the Orchestrator uses to decide next state
  *
  * Does NOT retry or debug — that's the Debugging Agent's job.
+ *
+ * Emits:
+ *   'stepStart'     { step, totalSteps }         — before each step begins
+ *   'stepCompleted' { step, totalSteps, result }  — after each step finishes
  */
-class ExecutionAgent {
+class ExecutionAgent extends EventEmitter {
   /**
    * @param {import('../claude/ClaudeCodeExecutor').ClaudeCodeExecutor} executor
    */
   constructor(executor) {
+    super();
     this._executor = executor;
   }
 
   /**
    * Implement a task in the given repo.
    *
+   * When `steps` is a non-empty array of `{id, description}` objects, each step
+   * is executed as a separate invocation and `onProgress` receives a
+   * `{ type: 'stepCompleted', step, result }` event after each one.
+   *
    * @param {string} task      - Natural language task description (or planned steps)
    * @param {string} repoPath  - Absolute path to the repo workspace
-   * @param {function} [onProgress] - Called with each streaming event
+   * @param {function} [onProgress] - Called with each streaming event (and stepCompleted events)
+   * @param {Array<{id: number, description: string}>} [steps] - Structured plan steps
    * @returns {Promise<CodingResult>}
    */
-  async code(task, repoPath, onProgress) {
+  async code(task, repoPath, onProgress, steps = []) {
+    if (steps.length > 0) {
+      return this._codeWithSteps(task, repoPath, onProgress, steps);
+    }
+
     const prompt = `You are implementing a software task in this repository.
 
 Task:
@@ -51,6 +66,48 @@ Instructions:
       output: result.output,
       budget: result.budget,
       exitCode: result.exitCode,
+    };
+  }
+
+  /**
+   * Execute each plan step as a separate invocation, emitting a stepCompleted
+   * event via onProgress after each step finishes.
+   * @private
+   */
+  async _codeWithSteps(task, repoPath, onProgress, steps) {
+    let lastOutput = '';
+    for (const step of steps) {
+      this.emit('stepStart', { step, totalSteps: steps.length });
+      onProgress?.({ type: 'stepStart', step, totalSteps: steps.length });
+
+      const stepPrompt = `You are implementing a software task in this repository.
+
+Task: ${task}
+
+Current step (${step.id} of ${steps.length}): ${step.description}
+
+Instructions:
+- Implement only this step
+- Do not modify unrelated files
+- Ensure existing code style is preserved
+- DO NOT run git add, git commit, or git push — leave changes unstaged
+- After making changes, confirm what was done in 1-2 sentences`;
+
+      const result = await this._executor.run(stepPrompt, repoPath, {
+        disallowedTools: ['WebSearch', 'WebFetch'],
+        onProgress: (e) => onProgress?.(e),
+      });
+
+      lastOutput = result.output;
+      this.emit('stepCompleted', { step, totalSteps: steps.length, result });
+      onProgress?.({ type: 'stepCompleted', step, totalSteps: steps.length, result });
+    }
+
+    return {
+      success: true,
+      output: lastOutput,
+      budget: this._executor.budgetStatus,
+      exitCode: 0,
     };
   }
 

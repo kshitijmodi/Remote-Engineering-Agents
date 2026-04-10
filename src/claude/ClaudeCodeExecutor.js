@@ -97,6 +97,7 @@ class ClaudeCodeExecutor {
         env: cleanEnv,
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
       });
 
       // Append .env block instruction to every prompt

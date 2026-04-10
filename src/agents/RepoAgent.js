@@ -240,7 +240,7 @@ class RepoAgent {
     const IS_WINDOWS = process.platform === 'win32';
     const GH_BIN = IS_WINDOWS ? 'C:\\Program Files\\GitHub CLI\\gh.exe' : 'gh';
     return new Promise((resolve, reject) => {
-      const proc = spawn(GH_BIN, args, { cwd, shell: false });
+      const proc = spawn(GH_BIN, args, { cwd, shell: false, windowsHide: true });
       let out = '';
       let err = '';
       proc.stdout?.on('data', d => (out += d));
@@ -260,7 +260,7 @@ class RepoAgent {
       : ['git', args];
 
     return new Promise((resolve, reject) => {
-      const proc = spawn(bin, binArgs, { cwd, shell: false });
+      const proc = spawn(bin, binArgs, { cwd, shell: false, windowsHide: true });
       let out = '';
       let err = '';
       proc.stdout?.on('data', (d) => (out += d));

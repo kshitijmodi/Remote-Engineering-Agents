@@ -1,4 +1,9 @@
-const { formatStageCompletion } = require('../utils/StatusFormatter');
+const {
+  formatStageCompletion,
+  formatPlan,
+  formatStepProgress,
+  formatCompletionRecap,
+} = require('../utils/StatusFormatter');
 
 /**
  * CommunicationAgent
@@ -22,11 +27,16 @@ class CommunicationAgent {
    * @param {function(string): void}         handlers.onResume     - (userId)
    * @param {function(string): void}         handlers.onCancel     - (userId)
    * @param {function(string): void}         handlers.onLogs       - (userId)
+   * @param {function(string): void}         handlers.onConfirm    - (userId)
+   * @param {function(string, string): void} handlers.onModify     - (userId, modificationText)
+   * @param {function(string, string): Promise<string>} [classify] - Optional async intent classifier
+   *        Signature: (userId, text) => Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'>
    */
-  constructor(messagingLayer, allowedNumbers, handlers) {
+  constructor(messagingLayer, allowedNumbers, handlers, classify = null) {
     this._messaging = messagingLayer;
     this._allowed = new Set(allowedNumbers);
     this._handlers = handlers;
+    this._classify = classify;
   }
 
   /**
@@ -64,6 +74,46 @@ class CommunicationAgent {
     await this._messaging.sendMessage(userId, text);
   }
 
+  /**
+   * Send a plan confirmation prompt to the user.
+   * Formats the plan steps and asks the user to /confirm, /cancel, or /modify.
+   * @param {string} userId
+   * @param {Array<{id: number, description: string}>} steps
+   */
+  async sendPlanConfirmation(userId, steps) {
+    const msg = formatPlan(steps);
+    await this.send(userId, msg).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send plan confirmation:', err.message);
+    });
+  }
+
+  /**
+   * Send a step progress update to the user.
+   * @param {string} userId
+   * @param {{id: number, description: string}} step - the step that just completed
+   * @param {number} totalSteps
+   */
+  async sendProgressUpdate(userId, step, totalSteps) {
+    const msg = formatStepProgress(step, totalSteps);
+    await this.send(userId, msg).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send progress update:', err.message);
+    });
+  }
+
+  /**
+   * Send a final task completion recap to the user.
+   * @param {string} userId
+   * @param {object} task          - task object with planSteps and stageTiming
+   * @param {object} [reviewResult]
+   * @param {object} [prResult]
+   */
+  async sendFinalConfirmation(userId, task, reviewResult, prResult) {
+    const msg = formatCompletionRecap(task, reviewResult, prResult);
+    await this.send(userId, msg).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send final confirmation:', err.message);
+    });
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   async _handleMessage(msg) {
@@ -79,38 +129,41 @@ class CommunicationAgent {
       return;
     }
 
-    // 3. Natural language — detect status checks, questions, push requests, vs coding tasks
-    if (this._isStatusCheck(text)) {
-      this._handlers.onStatus?.(userId);
-    } else if (this._isQuestion(text)) {
-      this._handlers.onQuery?.(userId, text);
-    } else if (this._isPushRequest(text)) {
-      this._handlers.onPush?.(userId, null);
+    // 3. Natural language — classify intent with LLM (or fall back to heuristic)
+    let intent;
+    if (this._classify) {
+      try {
+        intent = await this._classify(userId, text);
+      } catch {
+        intent = 'TASK'; // safe fallback on classifier error
+      }
     } else {
-      this._handlers.onTask?.(userId, text);
+      intent = this._heuristicClassify(text);
+    }
+
+    switch (intent) {
+      case 'STATUS':   this._handlers.onStatus?.(userId);        break;
+      case 'QUESTION': this._handlers.onQuery?.(userId, text);   break;
+      case 'PUSH':     this._handlers.onPush?.(userId, null);    break;
+      default:         this._handlers.onTask?.(userId, text);
     }
   }
 
-  _isStatusCheck(text) {
+  // Fallback heuristic used only when no LLM classifier is provided
+  _heuristicClassify(text) {
     const t = text.trim().toLowerCase().replace(/[?!.]/g, '');
-    return ['done', 'status', 'are you done', 'is it done', 'finished', 'complete',
-            'any update', 'update', 'progress', 'whats happening', "what's happening",
-            'still running', 'how long'].includes(t);
-  }
+    const statusPhrases = ['done', 'status', 'are you done', 'is it done', 'finished', 'complete',
+      'any update', 'update', 'progress', 'whats happening', "what's happening", 'still running', 'how long'];
+    if (statusPhrases.includes(t)) return 'STATUS';
 
-  _isQuestion(text) {
-    const t = text.trim().toLowerCase();
-    return /^(what|who|where|when|why|how|tell me|explain|describe|summarize|show me|list|can you|could you|is |are |does |do )/.test(t)
-      || t.endsWith('?');
-  }
+    const orig = text.trim().toLowerCase();
+    if (/^(what|who|where|when|why|how|tell me|explain|describe|summarize|show me|list|can you|could you|is |are |does |do )/.test(orig)
+      || orig.endsWith('?')) return 'QUESTION';
 
-  _isPushRequest(text) {
-    const t = text.trim().toLowerCase();
-    // Only match if the message is primarily about pushing — short and direct.
-    // Avoid matching task descriptions that happen to mention "push to github" at the end.
-    const isShort = t.split(' ').length <= 8;
-    const hasPushIntent = /^(push|send|upload|deploy|sync)/.test(t) || t === 'push to github' || t === '/push';
-    return isShort && hasPushIntent;
+    const words = orig.split(' ');
+    if (words.length <= 8 && (/^(push|send|upload|deploy|sync)/.test(orig) || orig === 'push to github')) return 'PUSH';
+
+    return 'TASK';
   }
 
   async _handleCommand(userId, text) {
@@ -140,6 +193,18 @@ class CommunicationAgent {
           return;
         }
         this._handlers.onSwitch?.(userId, arg);
+        break;
+
+      case '/confirm':
+        this._handlers.onConfirm?.(userId);
+        break;
+
+      case '/modify':
+        if (!arg) {
+          await this.send(userId, 'Usage: /modify <description of changes to the plan>');
+          return;
+        }
+        this._handlers.onModify?.(userId, arg);
         break;
 
       case '/resume':
@@ -189,6 +254,8 @@ class CommunicationAgent {
           `/repo — show currently active workspace\n\n` +
           `*Tasks*\n` +
           `Just type naturally — e.g. "Add a dark mode toggle"\n` +
+          `/confirm — approve the plan and start execution\n` +
+          `/modify <changes> — revise the plan before confirming\n` +
           `/push [branch-name] — commit and push changes to GitHub\n` +
           `/cancel — cancel the running task\n` +
           `/resume — extend budget by 10 and continue a paused task\n` +
