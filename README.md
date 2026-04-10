@@ -27,6 +27,7 @@ coding, testing, debugging, and PR creation — all using Claude Code CLI as the
 - [Architecture](#architecture)
 - [State Machine](#state-machine)
 - [Agents & Responsibilities](#agents--responsibilities)
+- [AI Agents Overview](#ai-agents-overview)
 - [Slash Commands](#slash-commands)
 - [Token Budget System](#token-budget-system)
 - [Task Object (Shared State)](#task-object-shared-state)
@@ -263,6 +264,212 @@ review
 | **Review Agent** | Runs Claude Code with diff review prompt, returns PASS/FAIL |
 | **Repo Agent** | Clones repos, manages `/workspace` isolation, handles `/connect` and `/switch` |
 | **Logging Agent** | Structured logs, 2-min checkpoints, `/logs` command |
+
+---
+
+## AI Agents Overview
+
+Each agent is a single JavaScript class in `src/agents/`. They share state via the Task Object and communicate through the Orchestrator — no agent calls another directly.
+
+---
+
+### CommunicationAgent
+
+**File:** `src/agents/CommunicationAgent.js`
+
+The gateway between WhatsApp and the rest of the system. Every inbound message passes through this agent before anything else runs, and every outbound update is sent through it.
+
+**Key responsibilities:**
+- **Whitelist authentication** — silently drops messages from any number not in `ALLOWED_NUMBERS`; authorized senders are never aware of rejections
+- **Slash command parsing** — intercepts `/connect`, `/init`, `/switch`, `/confirm`, `/modify`, `/resume`, `/cancel`, `/push`, `/logs`, `/list`, `/repo`, `/clear-context`, `/restart`, `/stop`, and `/help`, then calls the appropriate handler
+- **Intent-based routing** — passes free-text messages through the IntentAgent classifier (or a heuristic fallback) and routes them as `TASK`, `QUESTION`, `STATUS`, or `PUSH`
+- **Progress formatting** — subscribes to `stageChanged` events from the Orchestrator and sends formatted stage-completion messages to the user
+- **Plan confirmation flow** — sends formatted plan previews and collects `/confirm`, `/modify`, or `/cancel` responses
+
+**Interacts with:** MessagingLayer (send/receive all WhatsApp messages), IntentAgent (delegates free-text classification), OrchestratorAgent (invokes `startTask`, `cancelTask`, `resumeTask`, `confirmPlan`, `modifyPlan`; subscribes to `stageChanged` events), RepoAgent (invokes workspace commands for `/connect`, `/init`, `/switch`, `/list`).
+
+---
+
+### ContextAgent
+
+**File:** `src/agents/ContextAgent.js`
+
+Maintains a rolling conversation history per repository so Claude Code can be given relevant prior context when starting a new task.
+
+**Key responsibilities:**
+- **Per-repo history storage** — writes conversation entries as a JSON file (`.rea-context.json`) inside each repo directory, so history persists across bot restarts
+- **History trimming** — keeps only the most recent 10 exchanges to avoid bloating prompts
+- **Context block generation** — formats stored history into a plain-text block that PlanningAgent and OrchestratorAgent prepend to Claude Code prompts
+- **History clearing** — the `/clear-context` command calls `clear()` to reset history for the active repo without affecting other repos
+
+**Interacts with:** OrchestratorAgent (called at task start to supply `getContextBlock()` and at task end to `append()` the outcome), PlanningAgent (receives the formatted context block to include in planning prompts). Reads and writes `.rea-context.json` directly on the filesystem — no other agent dependency.
+
+---
+
+### DebuggingAgent
+
+**File:** `src/agents/DebuggingAgent.js`
+
+Called by the Orchestrator when tests fail. Applies a targeted fix via Claude Code CLI and hands control back so tests can be re-run.
+
+**Key responsibilities:**
+- **Root-cause analysis** — sends the original task description plus the full test failure output to Claude Code, instructing it to identify and fix only the failing code
+- **Minimal-patch enforcement** — the prompt explicitly forbids rewriting working code, keeping fixes surgical
+- **Attempt tracking** — accepts an `attempt` number (1–3) for logging; the Orchestrator decides whether to retry or fail after inspecting the result
+- **Budget reporting** — returns `budget` from the executor so the Orchestrator can detect budget exhaustion and pause the task
+
+**Interacts with:** OrchestratorAgent (receives `taskText`, `lastTestOutput`, `repoPath`, and `attempt` number from the Orchestrator; returns a `{ success, budget }` result), ClaudeCodeExecutor (the single outbound dependency — one CLI call per invocation). Never calls other agents directly.
+
+---
+
+### ExecutionAgent
+
+**File:** `src/agents/ExecutionAgent.js`
+
+Handles the two core coding stages: implementing the task and running the test suite.
+
+**Key responsibilities:**
+- **Step-by-step coding** — when the Orchestrator provides a structured plan, each step is executed as a separate Claude Code invocation; progress events (`stepStart`, `stepCompleted`) are emitted so the user sees per-step updates in WhatsApp
+- **Single-shot coding** — for tasks without a plan, the whole task is sent in one Claude Code call
+- **Test runner detection** — sniffs the repo for `package.json` (npm test), `pytest.ini`, `pyproject.toml`, `Cargo.toml`, `go.mod`, or `Makefile` to determine the correct test command before invoking Claude Code
+- **Structured test output parsing** — extracts `STATUS`, `PASSED`, `FAILED`, and `DETAILS` fields from Claude Code's response for the Orchestrator to act on
+- **No retry logic** — deliberately hands failures straight back to the Orchestrator, which decides whether to debug or fail
+
+**Interacts with:** OrchestratorAgent (called for `code()` and `test()` stages; emits `stepStart`/`stepCompleted` events that the Orchestrator forwards to CommunicationAgent), ClaudeCodeExecutor (all Claude Code CLI calls go through here). Reads the repo filesystem to detect the test runner but does not call other agents.
+
+---
+
+### IntentAgent
+
+**File:** `src/agents/IntentAgent.js`
+
+Classifies every free-text WhatsApp message into one of four intents so CommunicationAgent knows how to route it.
+
+**Key responsibilities:**
+- **LLM-based classification** — runs a dedicated Claude Haiku call (separate budget, never competes with the task pipeline) to determine intent
+- **Four intents** — `TASK` (write/fix/refactor code), `QUESTION` (explain or discuss something), `STATUS` (check on a running task), `PUSH` (commit and push current changes)
+- **Situational context** — includes the active task stage and whether a repo is connected in the classification prompt, improving accuracy (e.g. "done?" during a coding stage → `STATUS`, not `TASK`)
+- **Safe default** — returns `QUESTION` on any error so the bot answers rather than blindly starting a task
+
+**Interacts with:** CommunicationAgent (called as the `classify` callback with `(userId, text)`; returns an intent string). Queries OrchestratorAgent for the active task stage to enrich the classification prompt. Uses ClaudeCodeExecutor for the classification call but on a separate invocation budget so it never consumes the task's token allowance.
+
+---
+
+### LoggingAgent
+
+**File:** `src/agents/LoggingAgent.js`
+
+Provides structured logging and crash-recovery checkpointing for every task.
+
+**Key responsibilities:**
+- **Per-task log files** — writes JSON-structured log entries to `logs/task_<id>.log`; buffer is flushed to disk every 30 seconds
+- **Automatic checkpointing** — serializes the full Task Object to `checkpoints/task_<id>.json` every 2 minutes so the Orchestrator can resume from the last known state after a crash or disconnect
+- **Manual checkpointing** — the Orchestrator can also call `checkpoint()` directly at key transition points
+- **`/logs` command** — `getTailLogs()` reads and formats the last 20 log lines for display in WhatsApp
+- **Timer lifecycle** — `startTask()` / `endTask()` create and clean up flush and checkpoint timers so no timers leak between tasks
+
+**Interacts with:** OrchestratorAgent (called at every state transition via `log()`, and at task boundaries via `startTask()` / `endTask()`; the Orchestrator passes a snapshot callback to `startCheckpointing()` so the LoggingAgent can serialize task state without holding a direct reference to the task object). Writes only to the local filesystem — no other agent dependency.
+
+---
+
+### MetricsAgent
+
+**File:** `src/agents/MetricsAgent.js`
+
+Tracks aggregate task outcomes to validate the system's PRD success targets.
+
+**Key responsibilities:**
+- **Success/failure recording** — called by the Orchestrator at the end of every task with retry counts and stage timing data
+- **Execution time tracking** — calculates wall-clock time from planning start to task end for each task
+- **Aggregate summary** — `getSummary()` returns total tasks, success rate (%), average execution time, and average debugging retries across all historical tasks
+- **Persistent storage** — appends data to `logs/metrics.json` so stats survive bot restarts
+
+**Interacts with:** OrchestratorAgent exclusively — `recordSuccess()` and `recordFailure()` are called at the terminal state of every task. No other agent calls MetricsAgent. Writes to `logs/metrics.json` on the local filesystem.
+
+---
+
+### OrchestratorAgent
+
+**File:** `src/agents/OrchestratorAgent.js`
+
+The central state machine. Every task runs through the Orchestrator, which decides which agent to call next based on the current state and each agent's result.
+
+**Key responsibilities:**
+- **State machine execution** — drives tasks through `queued → planning → awaiting_confirmation → coding → testing → debugging → review → pr_created` (or `failed`/`cancelled`/`paused`)
+- **Plan confirmation gate** — after planning, waits for the user to send `/confirm`, `/modify`, or `/cancel` before proceeding to coding; times out after 5 minutes
+- **Retry enforcement** — allows up to 3 debug retries and 1 review-fail retry before marking a task `FAILED`
+- **Budget pause/resume** — catches `BudgetExceededError` from the executor, pauses the task, and resumes from the same stage when the user sends `/resume`
+- **Stage timing** — records start/end timestamps for every stage so CommunicationAgent can display elapsed times in progress messages
+- **Event emission** — emits `stageChanged` events that CommunicationAgent subscribes to for real-time WhatsApp updates
+
+**Interacts with:** All pipeline agents — calls PlanningAgent, ExecutionAgent, DebuggingAgent, ReviewAgent, and PRAgent in sequence based on task state. Calls LoggingAgent at every transition and MetricsAgent at task end. Reads context from ContextAgent at task start and appends the outcome on completion. Emits `stageChanged` events consumed by CommunicationAgent. Receives `confirmPlan`/`modifyPlan`/`cancelTask`/`resumeTask` calls from CommunicationAgent when the user responds to prompts.
+
+---
+
+### PRAgent
+
+**File:** `src/agents/PRAgent.js`
+
+Creates the final pull request once review passes.
+
+**Key responsibilities:**
+- **Feature branch creation** — generates a branch name from the task text (`feature/<slug>-<taskId>`) and checks it out
+- **Commit and push** — stages all changes with `git add -A`, commits with a `feat:` message, and pushes to the remote using a token-authenticated URL
+- **GitHub repo auto-creation** — if the repo has no remote origin (e.g. initialized with `/init`), creates a public GitHub repo via `gh repo create` before pushing
+- **PR creation via GitHub CLI** — runs `gh pr create` with the task text as the PR title and body; gracefully skips PR creation if `gh` is not available or the call fails
+- **Review notes passthrough** — if the ReviewAgent returned notes, they are included in the PR body under a "Review Notes" section
+
+**Interacts with:** OrchestratorAgent (called as the final pipeline step; receives `taskId`, `taskText`, `repoPath`, and optional `reviewNotes` from the Orchestrator; returns a `{ branchName, prUrl }` result). Shells out to `git` and the GitHub CLI (`gh`) — no other agent dependency.
+
+---
+
+### PlanningAgent
+
+**File:** `src/agents/PlanningAgent.js`
+
+Breaks a natural language task into a structured list of numbered implementation steps before coding begins.
+
+**Key responsibilities:**
+- **Step generation** — sends the task, repo file tree, and conversation context to Claude Haiku via Claude Code CLI, requesting a numbered list of up to 8 specific implementation steps
+- **Repo-aware planning** — includes the output of `git ls-files` in the prompt so Claude knows which files already exist
+- **Plan revision support** — accepts a `modification` string from the user (via `/modify`) and re-runs planning with the requested changes incorporated
+- **Step parsing** — extracts numbered lines from the model output, stripping markdown fences and bold markers, and returns an array of `{id, description}` objects for the Orchestrator
+
+**Interacts with:** OrchestratorAgent (called with `taskText`, `repoPath`, a progress-event callback, and an options object containing `fileTree`, `context`, and `modification`; returns `{ success, steps }`), ContextAgent (receives the pre-formatted context block from the Orchestrator, which fetches it from ContextAgent before calling `plan()`), ClaudeCodeExecutor (the sole outbound dependency for the actual Claude Code CLI call).
+
+---
+
+### RepoAgent
+
+**File:** `src/agents/RepoAgent.js`
+
+Manages the workspace: cloning repos, switching between them, and enforcing one-task-at-a-time locking.
+
+**Key responsibilities:**
+- **Repo cloning** — `/connect <url>` clones a GitHub repo into `workspace/<repo-name>/`; if already cloned, fetches and resets to `origin/HEAD` to ensure a clean state
+- **Local folder initialization** — `/init <path>` registers an existing local folder as a workspace, initializing a git repo if needed
+- **Active repo tracking** — maps each `userId` to their currently active workspace; persisted to `checkpoints/active-repos.json` so the mapping survives restarts
+- **Workspace switching** — `/switch <name>` changes the active repo for a user without re-cloning
+- **Exclusive task locking** — `acquireLock()` prevents two tasks from running concurrently on the same repo; returns a `release` function the Orchestrator calls when the task ends
+
+**Interacts with:** CommunicationAgent/index.js (workspace commands `/connect`, `/init`, `/switch`, `/list`, `/repo` are routed here from the command handler layer), OrchestratorAgent (calls `acquireLock()` before starting a task and the returned `release()` when the task ends). Shells out to `git` and `gh` for cloning — no other agent dependency.
+
+---
+
+### ReviewAgent
+
+**File:** `src/agents/ReviewAgent.js`
+
+Reviews the code diff produced by the task before a PR is created.
+
+**Key responsibilities:**
+- **Diff collection** — tries `git diff HEAD`, then `git diff --cached`, then `git diff origin/main...HEAD` in order to capture all changes regardless of whether they are staged or committed
+- **Auto-approval for small diffs** — skips the LLM call for diffs under 10 changed lines, returning an instant PASS to save an invocation
+- **Claude Haiku review** — sends the diff to Claude Haiku with the PRD prompt ("Review the following code diff for bugs and style issues. Respond only with: PASS or FAIL and reasons.")
+- **Verdict parsing** — scans the model output for a line starting with `PASS` or `FAIL`; defaults to `PASS` if the verdict is ambiguous to avoid infinite retry loops
+- **Advisory-only enforcement** — review failures are surfaced as notes in the PR body rather than blocking deployment, preventing pre-existing code issues from causing infinite retry cycles
+
+**Interacts with:** OrchestratorAgent (called after tests pass; receives `repoPath` and a progress-event callback; returns `{ passed, verdict, reasons }`), ClaudeCodeExecutor (used for the diff-review Claude Code CLI call; skipped entirely for small diffs). Shells out to `git` to collect the diff — no other agent dependency.
 
 ---
 
