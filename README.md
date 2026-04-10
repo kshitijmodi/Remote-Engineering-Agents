@@ -37,7 +37,7 @@ coding, testing, debugging, and PR creation — all using Claude Code CLI as the
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Advanced / For Contributors](#advanced--for-contributors)
-  - [Build Order](#build-order-for-claude-code)
+  - [Build Order](#build-order)
   - [Claude Code Prompt Templates](#claude-code-prompt-templates)
 - [Success Metrics](#success-metrics)
 - [MVP Scope](#mvp-scope)
