@@ -100,7 +100,7 @@ npm install
 Create a `.env` file in the root:
 
 ```
-ALLOWED_NUMBERS=15513582416@c.us
+ALLOWED_NUMBERS=1XXXXXXXXXX@c.us
 ```
 
 Replace with your own WhatsApp number in the format `<countrycode><number>@c.us`.
