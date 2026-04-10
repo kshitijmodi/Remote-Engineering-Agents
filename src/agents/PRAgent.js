@@ -19,7 +19,7 @@ class PRAgent {
    * @param {string} repoPath
    * @returns {Promise<PRResult>}
    */
-  async createPR(taskId, taskText, repoPath) {
+  async createPR(taskId, taskText, repoPath, reviewNotes = null) {
     const branch = this._branchName(taskText, taskId);
 
     // 1. Create and checkout feature branch
@@ -69,7 +69,8 @@ class PRAgent {
     const prTitle = `feat: ${taskText.slice(0, 72)}`;
     let prUrl = null;
     try {
-      const prBody = `Automated PR created by WhatsApp agent.\n\nTask: ${taskText}`;
+      const reviewSection = reviewNotes ? `\n\n## Review Notes\n${reviewNotes}` : '';
+      const prBody = `Automated PR created by WhatsApp agent.\n\nTask: ${taskText}${reviewSection}`;
       const out = await this._run(GH_BIN, ['pr', 'create', '--title', prTitle, '--body', prBody, '--head', branch], repoPath);
       prUrl = out.trim();
     } catch {
@@ -102,7 +103,7 @@ class PRAgent {
 
   _run(bin, args, cwd) {
     return new Promise((resolve, reject) => {
-      const proc = spawn(bin, args, { cwd, shell: false });
+      const proc = spawn(bin, args, { cwd, shell: false, windowsHide: true });
       let out = '';
       let err = '';
       proc.stdout?.on('data', d => (out += d));

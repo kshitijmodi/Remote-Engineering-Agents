@@ -17,11 +17,19 @@ class PlanningAgent {
    * @param {string} task     - Raw user task description
    * @param {string} repoPath - Absolute path to the repo workspace
    * @param {function} [onProgress]
+   * @param {object} [opts]
+   * @param {string} [opts.fileTree]     - Repo file listing to include as context
+   * @param {string} [opts.context]      - Extra conversation context
+   * @param {string} [opts.modification] - User-requested modification to a prior plan
    * @returns {Promise<PlanResult>}
    */
-  async plan(task, repoPath, onProgress) {
-    const prompt = `You are a software planning agent. Analyze this repository and break the following task into clear, numbered implementation steps.
+  async plan(task, repoPath, onProgress, { fileTree = '', context = '', modification = '' } = {}) {
+    const repoSection = fileTree ? `\nRepo files:\n${fileTree}\n` : '';
+    const contextSection = context ? `\nContext:\n${context}\n` : '';
+    const modificationSection = modification ? `\nModification request: ${modification}\n` : '';
 
+    const prompt = `You are a software planning agent. Analyze this repository and break the following task into clear, numbered implementation steps.
+${repoSection}${contextSection}${modificationSection}
 Task: ${task}
 
 Rules:
@@ -53,21 +61,33 @@ Example format:
   }
 
   _parseSteps(output) {
-    return output
+    // Strip markdown code fences the model sometimes wraps the list in
+    const stripped = output.replace(/```[\w]*\n?/g, '');
+    return stripped
       .split('\n')
       .map(l => l.trim())
-      .filter(l => /^\d+\./.test(l))
-      .map(l => l.replace(/^\d+\.\s*/, '').trim())
-      .filter(Boolean);
+      // Match "1." or "1)" with optional bold markers like "**1.**"
+      .filter(l => /^(\*\*)?(\d+)[.)]\*?\*?/.test(l))
+      .map((l, index) => ({
+        id: index + 1,
+        description: l.replace(/^(\*\*)?(\d+)[.)]\*?\*?\s*/, '').trim(),
+      }))
+      .filter(s => s.description);
   }
 }
 
 /**
+ * @typedef {Object} PlanStep
+ * @property {number} id
+ * @property {string} description
+ */
+
+/**
  * @typedef {Object} PlanResult
- * @property {boolean}  success
- * @property {string[]} steps
- * @property {string}   rawOutput
- * @property {object}   budget
+ * @property {boolean}    success
+ * @property {PlanStep[]} steps
+ * @property {string}     rawOutput
+ * @property {object}     budget
  */
 
 module.exports = { PlanningAgent };

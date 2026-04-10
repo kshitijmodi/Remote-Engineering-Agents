@@ -134,10 +134,126 @@ function formatStageCompletion(completedStage, stageTiming) {
   return `✅ *${label} complete*${durationStr}`;
 }
 
+/**
+ * Format a plan as a WhatsApp confirmation prompt.
+ * @param {Array<{id: number, description: string}>} steps
+ * @returns {string}
+ */
+function formatPlan(steps) {
+  const stepList = steps.map(s => `${s.id}. ${s.description}`).join('\n');
+  return `📋 *Implementation Plan* (${steps.length} steps):\n${stepList}\n\nReply /confirm to start, /cancel to abort, or /modify <changes> to revise.`;
+}
+
+/**
+ * Format a step completion progress message.
+ * @param {{id: number, description: string}} step
+ * @param {number} totalSteps
+ * @returns {string}
+ */
+function formatStepProgress(step, totalSteps) {
+  return `✅ *Step ${step.id}/${totalSteps} done*: ${step.description}`;
+}
+
+/**
+ * Format a final task completion recap.
+ * @param {object} task          - task object with planSteps and stageTiming
+ * @param {object} [reviewResult]
+ * @param {object} [prResult]
+ * @returns {string}
+ */
+function formatCompletionRecap(task, reviewResult, prResult) {
+  const taskStart = task.stageTiming?.planningStart ?? task.stageTiming?.codingStart;
+  const totalTimeStr = taskStart ? ` in ${formatElapsed(Date.now() - taskStart)}` : '';
+
+  const steps = task.planSteps ?? [];
+  const stepsSummary = steps.length
+    ? `\n*Steps completed (${steps.length}):*\n${steps.map(s => `  ✓ ${s.description}`).join('\n')}`
+    : '';
+
+  const reviewLine = reviewResult?.recap ? `\n_Review: ${reviewResult.recap}_` : '';
+
+  const prLine = prResult?.prUrl
+    ? `\nPR: ${prResult.prUrl}`
+    : prResult?.branch
+      ? `\nBranch: \`${prResult.branch}\``
+      : '';
+
+  const budgetLine = task._budgetStr ? `\nBudget used: ${task._budgetStr}` : '';
+
+  return `🎉 *Task complete${totalTimeStr}!*${stepsSummary}${reviewLine}${prLine}${budgetLine}`;
+}
+
+/**
+ * Format a confirmation acknowledgment sent after the user responds to a plan.
+ * @param {'confirmed'|'cancelled'} action
+ * @param {string} [reason] - optional reason for cancellation
+ * @returns {string}
+ */
+function formatConfirmationAck(action, reason) {
+  if (action === 'confirmed') {
+    return '✅ *Confirmed!* Starting execution now…';
+  }
+  const reasonStr = reason ? `: ${reason}` : '';
+  return `🚫 *Cancelled${reasonStr}*. Task has been aborted.`;
+}
+
+/**
+ * Format a message indicating a plan confirmation request has timed out.
+ * @param {number} timeoutSec - how many seconds were allowed
+ * @returns {string}
+ */
+function formatConfirmationTimeout(timeoutSec) {
+  return `⏰ *Confirmation timed out* after ${timeoutSec}s. Task has been cancelled. Send a new request to retry.`;
+}
+
+/**
+ * Format a "step in progress" message (emitted when a step starts executing).
+ * @param {{id: number, description: string}} step
+ * @param {number} totalSteps
+ * @returns {string}
+ */
+function formatStepInProgress(step, totalSteps) {
+  return `🔄 *Step ${step.id}/${totalSteps}*: ${step.description}`;
+}
+
+/**
+ * Format a mid-execution progress summary (emitted periodically during execution).
+ * @param {number} completedSteps
+ * @param {number} totalSteps
+ * @param {string} [currentDescription] - description of the currently running step
+ * @returns {string}
+ */
+function formatExecutionProgress(completedSteps, totalSteps, currentDescription) {
+  const bar = buildProgressBar(completedSteps, totalSteps);
+  let msg = `⚙️ *Executing* ${bar} ${completedSteps}/${totalSteps}`;
+  if (currentDescription) msg += `\n↪ ${currentDescription}`;
+  return msg;
+}
+
+/**
+ * Build a simple ASCII progress bar.
+ * @param {number} done
+ * @param {number} total
+ * @param {number} [width=10]
+ * @returns {string}
+ */
+function buildProgressBar(done, total, width = 10) {
+  if (total === 0) return '[' + '░'.repeat(width) + ']';
+  const filled = Math.round((done / total) * width);
+  return '[' + '█'.repeat(filled) + '░'.repeat(width - filled) + ']';
+}
+
 module.exports = {
   formatElapsed,
   formatProgressMessage,
   formatStageCompletion,
   calculateEstimatedCompletion,
   getStageDuration,
+  formatPlan,
+  formatStepProgress,
+  formatCompletionRecap,
+  formatConfirmationAck,
+  formatConfirmationTimeout,
+  formatStepInProgress,
+  formatExecutionProgress,
 };
