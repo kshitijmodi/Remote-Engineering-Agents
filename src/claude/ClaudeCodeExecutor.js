@@ -1,7 +1,49 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const { buildContentBlocksFromAttachments } = require('../utils/MultimodalHandler');
 
 const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Build an array of Claude API content blocks from a `media` descriptor object.
+ * Combines attachment blocks (images, PDFs) with text summaries of fetched links.
+ *
+ * @param {{ attachments?: Array, links?: Array }|undefined} media
+ * @returns {Array<object>} Claude API content blocks (empty array when no media)
+ */
+function buildMultimodalBlocks(media) {
+  if (!media) return [];
+
+  const blocks = [];
+
+  // Image / PDF attachments → typed content blocks
+  if (Array.isArray(media.attachments) && media.attachments.length > 0) {
+    const attachmentBlocks = buildContentBlocksFromAttachments(media.attachments);
+    blocks.push(...attachmentBlocks);
+  }
+
+  // Processed link results → text blocks with fetched content
+  if (Array.isArray(media.links) && media.links.length > 0) {
+    for (const link of media.links) {
+      if (!link.valid || link.error) continue;
+      if (link.category === 'text' && link.textContent) {
+        const snippet = link.textContent.slice(0, 8000); // cap per-link context
+        blocks.push({
+          type: 'text',
+          text: `[Link: ${link.url}]\n${snippet}`,
+        });
+      } else {
+        // Non-text links: include at least the URL and content type as context
+        blocks.push({
+          type: 'text',
+          text: `[Link: ${link.url}] (content-type: ${link.contentType ?? 'unknown'}, category: ${link.category})`,
+        });
+      }
+    }
+  }
+
+  return blocks;
+}
 
 /**
  * Wraps Claude Code CLI invocations.
@@ -12,7 +54,7 @@ const IS_WINDOWS = process.platform === 'win32';
  *   const result = await executor.run('Add CSV export to utils/export.js', '/workspace/my-repo');
  */
 class ClaudeCodeExecutor {
-  constructor({ maxInvocations = 15, timeoutMs = 300_000 } = {}) {
+  constructor({ maxInvocations = 60, timeoutMs = 3_600_000 } = {}) {
     this.maxInvocations = maxInvocations;
     this.timeoutMs = timeoutMs;
     this.invocations = 0;
@@ -46,9 +88,12 @@ class ClaudeCodeExecutor {
    * @param {string[]} opts.allowedTools   - Tool whitelist (default: all)
    * @param {string[]} opts.disallowedTools - Tool blacklist
    * @param {function} opts.onProgress     - Called with each streaming event
+   * @param {object}   opts.media          - Multimodal content to include
+   * @param {Array}    opts.media.attachments - Raw attachment objects (images/PDFs from WhatsApp)
+   * @param {Array}    opts.media.links       - Processed link results from LinkProcessor
    * @returns {Promise<ExecutionResult>}
    */
-  async run(prompt, repoPath, { allowedTools, disallowedTools, onProgress, model } = {}) {
+  async run(prompt, repoPath, { allowedTools, disallowedTools, onProgress, model, media } = {}) {
     if (this.budgetExceeded) {
       throw new BudgetExceededError(this.budgetStatus);
     }
@@ -60,12 +105,19 @@ class ClaudeCodeExecutor {
     this.invocations += 1;
     const invocationIndex = this.invocations;
 
+    // Build multimodal content blocks when media is provided.
+    // Links that returned readable text are injected as text blocks;
+    // image/PDF attachments become typed content blocks for Claude vision/document API.
+    const mediaBlocks = buildMultimodalBlocks(media);
+    const isMultimodal = mediaBlocks.length > 0;
+
     // Prompt is passed via stdin to avoid shell argument escaping issues on Windows.
-    // --input-format text is the default; --verbose is required with stream-json.
+    // When multimodal content is present we switch to --input-format json so that
+    // image and document content blocks can be included alongside the text prompt.
     const args = [
       '--print',
       '--output-format', 'stream-json',
-      '--input-format', 'text',
+      '--input-format', isMultimodal ? 'json' : 'text',
       '--dangerously-skip-permissions',
       '--no-session-persistence',
       '--verbose',
@@ -103,8 +155,19 @@ class ClaudeCodeExecutor {
       // Append .env block instruction to every prompt
       const safePrompt = prompt + ClaudeCodeExecutor.ENV_BLOCK_PROMPT;
 
-      // Write prompt to stdin, then close — this is how --print mode accepts input.
-      proc.stdin.write(safePrompt);
+      // Write prompt/content to stdin, then close.
+      // Multimodal: send a JSON messages array with mixed content blocks.
+      // Text-only: send the prompt as plain text (default mode).
+      if (isMultimodal) {
+        const contentBlocks = [
+          { type: 'text', text: safePrompt },
+          ...mediaBlocks,
+        ];
+        const messages = [{ role: 'user', content: contentBlocks }];
+        proc.stdin.write(JSON.stringify(messages));
+      } else {
+        proc.stdin.write(safePrompt);
+      }
       proc.stdin.end();
 
       const events = [];
@@ -204,4 +267,4 @@ class ExecutionError extends Error {
   }
 }
 
-module.exports = { ClaudeCodeExecutor, BudgetExceededError, ExecutionTimeoutError, ExecutionError };
+module.exports = { ClaudeCodeExecutor, BudgetExceededError, ExecutionTimeoutError, ExecutionError, buildMultimodalBlocks };

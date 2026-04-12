@@ -14,6 +14,7 @@ const { OrchestratorAgent } = require('./src/agents/OrchestratorAgent');
 const { ContextAgent } = require('./src/agents/ContextAgent');
 const { IntentAgent } = require('./src/agents/IntentAgent');
 const { formatStepInProgress } = require('./src/utils/StatusFormatter');
+const { processLinksFromText } = require('./src/utils/LinkProcessor');
 const fs = require('fs');
 const path = require('path');
 
@@ -38,7 +39,7 @@ async function main() {
   const messaging = new WhatsAppProvider();
   const executor  = new ClaudeCodeExecutor({
     maxInvocations: 15,
-    timeoutMs: 600_000,  // 10 min — complex coding tasks regularly exceed the old 5 min default
+    timeoutMs: 3_600_000,  // 60 min — complex coding tasks regularly exceed the old 5 min default
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
   });
@@ -193,8 +194,16 @@ async function main() {
 
       context.append(repoPath, 'user', taskText);
       const release = repoAgent.acquireLock(userId);
-      const taskId  = orchestrator.startTask(userId, taskText, repoPath, context);
-      await reliableSend(userId, `Task accepted (${taskId}). Starting planner... Budget: 0/15`);
+
+      // Process any URLs in the message and attach as multimodal context
+      let multimodalContext = null;
+      const processedLinks = await processLinksFromText(taskText).catch(() => []);
+      if (processedLinks.length > 0) {
+        multimodalContext = { links: processedLinks };
+      }
+
+      const taskId  = orchestrator.startTask(userId, taskText, repoPath, context, multimodalContext);
+      await reliableSend(userId, `Task accepted (${taskId}). Starting planner... Budget: 0/60`);
 
       const interval = setInterval(() => {
         const task = orchestrator.getActiveTask(userId);
@@ -362,7 +371,7 @@ async function main() {
         try {
           await reliableSend(
             cp.userId,
-            `🔄 *Resuming interrupted task* ${cp.taskId}\nStage: *${cp.status}* | Budget used: ${cp.invocations}/15`
+            `🔄 *Resuming interrupted task* ${cp.taskId}\nStage: *${cp.status}* | Budget used: ${cp.invocations}/60`
           );
           // Restore repo context and restart task from checkpoint stage
           const repoPath = cp.repo;

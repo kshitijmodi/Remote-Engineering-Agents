@@ -21,9 +21,10 @@ class PlanningAgent {
    * @param {string} [opts.fileTree]     - Repo file listing to include as context
    * @param {string} [opts.context]      - Extra conversation context
    * @param {string} [opts.modification] - User-requested modification to a prior plan
+   * @param {object} [opts.media]        - Multimodal content (attachments/links) from the user message
    * @returns {Promise<PlanResult>}
    */
-  async plan(task, repoPath, onProgress, { fileTree = '', context = '', modification = '' } = {}) {
+  async plan(task, repoPath, onProgress, { fileTree = '', context = '', modification = '', media } = {}) {
     const repoSection = fileTree ? `\nRepo files:\n${fileTree}\n` : '';
     const contextSection = context ? `\nContext:\n${context}\n` : '';
     const modificationSection = modification ? `\nModification request: ${modification}\n` : '';
@@ -48,6 +49,7 @@ Example format:
       allowedTools: ['Read', 'Glob', 'Grep'],
       model: 'claude-haiku-4-5-20251001',
       onProgress,
+      media,
     });
 
     const steps = this._parseSteps(result.output);

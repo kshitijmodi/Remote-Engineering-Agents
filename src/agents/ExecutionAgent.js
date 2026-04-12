@@ -37,11 +37,12 @@ class ExecutionAgent extends EventEmitter {
    * @param {string} repoPath  - Absolute path to the repo workspace
    * @param {function} [onProgress] - Called with each streaming event (and stepCompleted events)
    * @param {Array<{id: number, description: string}>} [steps] - Structured plan steps
+   * @param {{ attachments?: Array, links?: Array }} [media] - Multimodal context (images, PDFs, links)
    * @returns {Promise<CodingResult>}
    */
-  async code(task, repoPath, onProgress, steps = []) {
+  async code(task, repoPath, onProgress, steps = [], media) {
     if (steps.length > 0) {
-      return this._codeWithSteps(task, repoPath, onProgress, steps);
+      return this._codeWithSteps(task, repoPath, onProgress, steps, media);
     }
 
     const prompt = `You are implementing a software task in this repository.
@@ -59,6 +60,7 @@ Instructions:
     const result = await this._executor.run(prompt, repoPath, {
       disallowedTools: ['WebSearch', 'WebFetch'],
       onProgress,
+      media,
     });
 
     return {
@@ -74,7 +76,7 @@ Instructions:
    * event via onProgress after each step finishes.
    * @private
    */
-  async _codeWithSteps(task, repoPath, onProgress, steps) {
+  async _codeWithSteps(task, repoPath, onProgress, steps, media) {
     let lastOutput = '';
     for (const step of steps) {
       this.emit('stepStart', { step, totalSteps: steps.length });
@@ -96,6 +98,7 @@ Instructions:
       const result = await this._executor.run(stepPrompt, repoPath, {
         disallowedTools: ['WebSearch', 'WebFetch'],
         onProgress: (e) => onProgress?.(e),
+        media,
       });
 
       lastOutput = result.output;

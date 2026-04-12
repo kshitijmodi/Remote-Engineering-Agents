@@ -66,9 +66,11 @@ class OrchestratorAgent extends EventEmitter {
    * @param {string} userId
    * @param {string} taskText
    * @param {string} repoPath
+   * @param {object|null} context
+   * @param {{ attachments?: Array, links?: Array }|null} media - Multimodal context (images, PDFs, links)
    * @returns {string} taskId
    */
-  startTask(userId, taskText, repoPath, context = null) {
+  startTask(userId, taskText, repoPath, context = null, media = null) {
     const taskId = randomUUID().slice(0, 8);
     const task = {
       taskId,
@@ -76,6 +78,7 @@ class OrchestratorAgent extends EventEmitter {
       taskText,
       repoPath,
       context,
+      media,
       status: STATES.QUEUED,
       retries: { coding: 0, debugging: 0, review: 0 },
       lastTestOutput: '',
@@ -273,7 +276,7 @@ class OrchestratorAgent extends EventEmitter {
     while (true) {
       const result = await planning.plan(task.taskText, task.repoPath, (e) =>
         logging.log(task.taskId, 'DEBUG', 'planning event', { type: e.type }),
-        { fileTree, context: contextBlock, modification }
+        { fileTree, context: contextBlock, modification, media: task.media }
       );
 
       if (!result.success || result.steps.length === 0) {
@@ -417,7 +420,7 @@ class OrchestratorAgent extends EventEmitter {
           .catch(() => {});
       }
       logging.log(task.taskId, 'DEBUG', 'coding event', { type: e.type });
-    }, task.planSteps);
+    }, task.planSteps, task.media);
 
     logging.log(task.taskId, 'INFO', 'Coding complete', { success: result.success });
     await this._notify(

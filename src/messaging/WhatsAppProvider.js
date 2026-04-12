@@ -2,7 +2,14 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
-const { MessagingLayer } = require('./MessagingLayer');
+const { MessagingLayer, buildMessage } = require('./MessagingLayer');
+const { extractMediaMetadata } = require('../utils/MultimodalHandler');
+
+// Message types that may carry media or text we want to process
+const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document']);
+
+// Simple URL extractor — captures http/https links from free text
+const URL_REGEX = /https?:\/\/[^\s<>"']+/g;
 
 const AUTH_PATH = path.resolve('./.wwebjs_auth_business');
 
@@ -59,19 +66,45 @@ class WhatsAppProvider extends MessagingLayer {
 
     // Business number setup: incoming messages from other people.
     // fromMe=false means someone else sent this — no self-loop risk.
-    this._client.on('message', (msg) => {
+    // Using async so we can await media downloads before invoking the callback.
+    this._client.on('message', async (msg) => {
       if (!this._messageCallback) return;
-      if (msg.type !== 'chat') return;
+      if (!SUPPORTED_MSG_TYPES.has(msg.type)) return;
       if (msg.fromMe) return;
 
       // Use the @c.us ID for sending replies if available, fall back to msg.from
       const userId = msg.author || msg.from;
-      console.log(`[WhatsApp] Incoming from ${userId}: "${msg.body?.slice(0, 60)}"`);
+      console.log(`[WhatsApp] Incoming from ${userId} (${msg.type}): "${msg.body?.slice(0, 60)}"`);
+
+      // Extract any URLs present in the message text and wrap as LinkObjects
+      const links = msg.body
+        ? (msg.body.match(URL_REGEX) || []).map((url) => ({ url, title: null, description: null }))
+        : [];
+
+      // Download media attachment when the message carries one (image, PDF, etc.)
+      // Each entry is enriched with normalised metadata via MultimodalHandler so
+      // downstream agents receive a consistent {type, mimeType, filename, filesize, data} shape.
+      let media = [];
+      if (msg.hasMedia) {
+        try {
+          const attachment = await msg.downloadMedia();
+          if (attachment) {
+            const metadata = extractMediaMetadata(attachment);
+            media = [{ ...metadata, _raw: attachment }];
+          }
+        } catch (err) {
+          console.warn('[WhatsApp] Failed to download media:', err.message);
+        }
+      }
 
       this._messageCallback({
-        userId,
-        text: msg.body.trim(),
-        receivedAt: new Date(msg.timestamp * 1000),
+        ...buildMessage({
+          userId,
+          text: msg.body ? msg.body.trim() : '',
+          receivedAt: new Date(msg.timestamp * 1000),
+          media,
+          links,
+        }),
         _raw: msg,
       });
     });
