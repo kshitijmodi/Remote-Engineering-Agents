@@ -4,6 +4,7 @@ const {
   formatStepProgress,
   formatCompletionRecap,
 } = require('../utils/StatusFormatter');
+const { MessageMedia } = require('whatsapp-web.js');
 
 /**
  * CommunicationAgent
@@ -75,6 +76,65 @@ class CommunicationAgent {
   }
 
   /**
+   * Send a media attachment back to a user (image or PDF).
+   * Falls back to a descriptive text caption if the provider does not support
+   * raw media sending.
+   *
+   * @param {string} userId
+   * @param {{ mimeType: string, data: string, filename?: string|null, caption?: string|null }} mediaItem
+   *   - data: base64-encoded content
+   */
+  async sendMedia(userId, mediaItem) {
+    const { mimeType, data, filename, caption } = mediaItem;
+
+    // Prefer native media sending when the messaging provider exposes it
+    if (typeof this._messaging.sendMediaMessage === 'function') {
+      await this._messaging.sendMediaMessage(userId, mediaItem);
+      return;
+    }
+
+    // whatsapp-web.js path — build a MessageMedia and send it directly via
+    // the underlying client if it is accessible on the provider.
+    const client = this._messaging._client;
+    if (client && typeof client.sendMessage === 'function' && data) {
+      try {
+        const media = new MessageMedia(mimeType, data, filename || null);
+        await client.sendMessage(userId, media, caption ? { caption } : {});
+        return;
+      } catch (err) {
+        console.warn('[CommunicationAgent] sendMedia via _client failed:', err.message);
+      }
+    }
+
+    // Last-resort: send a text description so the user knows media was processed
+    const label = filename ? `"${filename}"` : mimeType;
+    await this.send(userId, `[Media: ${label}]${caption ? ` — ${caption}` : ''}`);
+  }
+
+  /**
+   * Send a response that may contain both text and media items.
+   * Text is sent first; each media attachment is sent as a separate message.
+   *
+   * @param {string} userId
+   * @param {string} text          - Text portion of the response (may be empty)
+   * @param {Array<object>} [mediaItems] - Optional array of media items to send
+   */
+  async sendMultimodalResponse(userId, text, mediaItems = []) {
+    if (text && text.trim()) {
+      await this.send(userId, text);
+    }
+
+    for (const item of mediaItems) {
+      try {
+        await this.sendMedia(userId, item);
+      } catch (err) {
+        console.error('[CommunicationAgent] Failed to send media item:', err.message);
+        // Continue sending remaining items even if one fails
+      }
+    }
+  }
+
+  /**
    * Send a plan confirmation prompt to the user.
    * Formats the plan steps and asks the user to /confirm, /cancel, or /modify.
    * @param {string} userId
@@ -117,35 +177,56 @@ class CommunicationAgent {
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   async _handleMessage(msg) {
-    const { userId, text } = msg;
+    const { userId, text, media = [], urls = [], links = [] } = msg;
 
     // 1. Auth — silently ignore unauthorized senders
     if (!this._allowed.has(userId)) return;
-    console.log(`[CommunicationAgent] Message from ${userId}: "${text.slice(0, 60)}..."`);
+
+    // Merge urls (WhatsApp raw) and links (normalised MessagingLayer objects)
+    const allUrls = [...urls, ...links.map((l) => (typeof l === 'string' ? l : l.url)).filter(Boolean)];
+
+    const mediaCount = media.length;
+    const urlCount = allUrls.length;
+    const multimodalSuffix = [
+      mediaCount ? `${mediaCount} media` : '',
+      urlCount ? `${urlCount} URL(s)` : '',
+    ].filter(Boolean).join(', ');
+
+    console.log(
+      `[CommunicationAgent] Message from ${userId}: "${(text || '').slice(0, 60)}"` +
+      (multimodalSuffix ? ` [+${multimodalSuffix}]` : '')
+    );
 
     // 2. Parse slash commands
-    if (text.startsWith('/')) {
+    if (text && text.startsWith('/')) {
       await this._handleCommand(userId, text);
       return;
     }
 
-    // 3. Natural language — classify intent with LLM (or fall back to heuristic)
+    // 3. If the message carries only media with no text, synthesize a placeholder
+    //    so intent classification still works and handlers receive something useful.
+    const effectiveText = text || (mediaCount ? '[media attachment]' : '');
+
+    // 4. Natural language — classify intent with LLM (or fall back to heuristic)
     let intent;
     if (this._classify) {
       try {
-        intent = await this._classify(userId, text);
+        intent = await this._classify(userId, effectiveText);
       } catch {
         intent = 'TASK'; // safe fallback on classifier error
       }
     } else {
-      intent = this._heuristicClassify(text);
+      intent = this._heuristicClassify(effectiveText);
     }
 
+    // Multimodal context object forwarded to all handlers that accept it
+    const multimodal = { media, urls: allUrls };
+
     switch (intent) {
-      case 'STATUS':   this._handlers.onStatus?.(userId);        break;
-      case 'QUESTION': this._handlers.onQuery?.(userId, text);   break;
-      case 'PUSH':     this._handlers.onPush?.(userId, null);    break;
-      default:         this._handlers.onTask?.(userId, text);
+      case 'STATUS':   this._handlers.onStatus?.(userId);                              break;
+      case 'QUESTION': this._handlers.onQuery?.(userId, effectiveText, multimodal);    break;
+      case 'PUSH':     this._handlers.onPush?.(userId, null);                          break;
+      default:         this._handlers.onTask?.(userId, effectiveText, multimodal);
     }
   }
 

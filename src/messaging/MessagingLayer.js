@@ -60,6 +60,28 @@ class MessagingLayer {
  * @property {Date}   receivedAt
  * @property {boolean} isConfirmation  - true if text is a /confirm or /cancel command
  * @property {string|null} confirmationAction  - 'confirm' | 'cancel' | null
+ * @property {MediaAttachment[]} media - Array of media attachments (images, PDFs, etc.)
+ * @property {LinkObject[]} links      - Array of extracted URLs from message text
+ */
+
+/**
+ * A media attachment extracted from an incoming message.
+ *
+ * @typedef {Object} MediaAttachment
+ * @property {string} type       - MIME type (e.g. 'image/jpeg', 'application/pdf')
+ * @property {string} url        - Provider-supplied download URL for the media
+ * @property {string|null} caption - Optional caption accompanying the media
+ * @property {string|null} filename - Original filename, if available
+ * @property {number|null} size  - File size in bytes, if available
+ */
+
+/**
+ * A URL extracted from message text or a shared link preview.
+ *
+ * @typedef {Object} LinkObject
+ * @property {string} url        - The raw URL string
+ * @property {string|null} title - Page title from link preview, if available
+ * @property {string|null} description - Short description from link preview, if available
  */
 
 /**
@@ -89,4 +111,30 @@ function parseConfirmationCommand(text) {
   return { isConfirmation: false, confirmationAction: null };
 }
 
-module.exports = { MessagingLayer, parseConfirmationCommand };
+/**
+ * Builds a normalized Message object with all required fields, including the
+ * new multimodal fields. Providers should call this instead of constructing
+ * the object ad-hoc to ensure the shape stays consistent.
+ *
+ * @param {object} opts
+ * @param {string}  opts.userId
+ * @param {string}  opts.text
+ * @param {Date}    [opts.receivedAt]
+ * @param {MediaAttachment[]} [opts.media]
+ * @param {LinkObject[]}      [opts.links]
+ * @returns {Message}
+ */
+function buildMessage({ userId, text, receivedAt, media, links }) {
+  const { isConfirmation, confirmationAction } = parseConfirmationCommand(text);
+  return {
+    userId,
+    text,
+    receivedAt: receivedAt || new Date(),
+    isConfirmation,
+    confirmationAction,
+    media: Array.isArray(media) ? media : [],
+    links: Array.isArray(links) ? links : [],
+  };
+}
+
+module.exports = { MessagingLayer, parseConfirmationCommand, buildMessage };

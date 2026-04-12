@@ -27,21 +27,38 @@ class IntentAgent {
    * @param {string}  [opts.contextBlock]  - Recent conversation history string
    * @param {string}  [opts.activeStatus]  - Current task status, e.g. "coding"
    * @param {boolean} [opts.hasActiveRepo] - Whether the user has a repo connected
+   * @param {object}  [opts.multimodal]    - Multimodal context from the message
+   * @param {Array}   [opts.multimodal.media] - Attached media (images, PDFs, etc.)
+   * @param {Array}   [opts.multimodal.links] - Processed links from the message
    * @returns {Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'>}
    */
-  async classify(message, { contextBlock = '', activeStatus = null, hasActiveRepo = false } = {}) {
+  async classify(message, { contextBlock = '', activeStatus = null, hasActiveRepo = false, multimodal = null } = {}) {
     const situationLines = [
       hasActiveRepo ? 'User has an active repo workspace.' : 'No repo workspace is currently connected.',
       activeStatus ? `There is a task currently running at stage: ${activeStatus}.` : 'No task is currently running.',
       contextBlock ? `Recent conversation:\n${contextBlock}` : '',
     ].filter(Boolean).join('\n');
 
+    // Summarise any attachments so the LLM has richer context for classification
+    const attachmentLines = [];
+    if (multimodal) {
+      const media = multimodal.media;
+      const links = multimodal.links;
+      if (Array.isArray(media) && media.length > 0) {
+        const summary = media.map(m => m.mimeType || m.type || 'file').join(', ');
+        attachmentLines.push(`Attachments: ${summary}`);
+      }
+      if (Array.isArray(links) && links.length > 0) {
+        attachmentLines.push(`Links: ${links.map(l => l.url || l).join(', ')}`);
+      }
+    }
+
     const prompt = `You are the intent router for a WhatsApp coding bot backed by Claude Code.
 
 Current situation:
 ${situationLines}
 
-User's message: "${message}"
+User's message: "${message}"${attachmentLines.length > 0 ? `\n${attachmentLines.join('\n')}` : ''}
 
 Classify the intent. Reply with exactly ONE word — no punctuation, no explanation:
   TASK     — user wants code written, modified, fixed, created, or refactored in the repo
