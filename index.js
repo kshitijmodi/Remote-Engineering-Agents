@@ -155,7 +155,7 @@ async function main() {
       );
     },
 
-    onQuery: async (userId, question) => {
+    onQuery: async (userId, question, incomingMultimodal) => {
       let repoPath;
       try {
         repoPath = repoAgent.getActiveRepoPath(userId);
@@ -179,7 +179,7 @@ async function main() {
       }
     },
 
-    onTask: async (userId, taskText) => {
+    onTask: async (userId, taskText, incomingMultimodal) => {
       let repoPath;
       try {
         repoPath = repoAgent.getActiveRepoPath(userId);
@@ -195,11 +195,28 @@ async function main() {
       context.append(repoPath, 'user', taskText);
       const release = repoAgent.acquireLock(userId);
 
-      // Process any URLs in the message and attach as multimodal context
-      let multimodalContext = null;
+      // Process URLs found in the message text via LinkProcessor
       const processedLinks = await processLinksFromText(taskText).catch(() => []);
-      if (processedLinks.length > 0) {
-        multimodalContext = { links: processedLinks };
+
+      // Merge: processed links + any links/URLs pre-extracted by WhatsAppProvider
+      // plus any media attachments (images, PDFs) forwarded by CommunicationAgent
+      const incomingLinks = incomingMultimodal?.urls
+        ? incomingMultimodal.urls.map((u) => (typeof u === 'string' ? { url: u, title: null, description: null } : u))
+        : [];
+      const incomingMedia = incomingMultimodal?.media ?? [];
+
+      const allLinks = [
+        ...processedLinks,
+        // Avoid duplicates — skip incoming links whose URL is already in processedLinks
+        ...incomingLinks.filter((l) => !processedLinks.some((p) => p.url === l.url)),
+      ];
+
+      let multimodalContext = null;
+      if (allLinks.length > 0 || incomingMedia.length > 0) {
+        multimodalContext = {
+          ...(allLinks.length > 0 ? { links: allLinks } : {}),
+          ...(incomingMedia.length > 0 ? { media: incomingMedia } : {}),
+        };
       }
 
       const taskId  = orchestrator.startTask(userId, taskText, repoPath, context, multimodalContext);
