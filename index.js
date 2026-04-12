@@ -203,7 +203,7 @@ async function main() {
       }
 
       const taskId  = orchestrator.startTask(userId, taskText, repoPath, context, multimodalContext);
-      await reliableSend(userId, `Task accepted (${taskId}). Starting planner... Budget: 0/15`);
+      await reliableSend(userId, `Task accepted (${taskId}). Starting planner... Budget: 0/60`);
 
       const interval = setInterval(() => {
         const task = orchestrator.getActiveTask(userId);
@@ -371,7 +371,7 @@ async function main() {
         try {
           await reliableSend(
             cp.userId,
-            `🔄 *Resuming interrupted task* ${cp.taskId}\nStage: *${cp.status}* | Budget used: ${cp.invocations}/15`
+            `🔄 *Resuming interrupted task* ${cp.taskId}\nStage: *${cp.status}* | Budget used: ${cp.invocations}/60`
           );
           // Restore repo context and restart task from checkpoint stage
           const repoPath = cp.repo;

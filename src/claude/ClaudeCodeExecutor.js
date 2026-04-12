@@ -54,7 +54,7 @@ function buildMultimodalBlocks(media) {
  *   const result = await executor.run('Add CSV export to utils/export.js', '/workspace/my-repo');
  */
 class ClaudeCodeExecutor {
-  constructor({ maxInvocations = 15, timeoutMs = 3_600_000 } = {}) {
+  constructor({ maxInvocations = 60, timeoutMs = 3_600_000 } = {}) {
     this.maxInvocations = maxInvocations;
     this.timeoutMs = timeoutMs;
     this.invocations = 0;
