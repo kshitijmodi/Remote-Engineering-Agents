@@ -38,7 +38,7 @@ async function main() {
   // Core infrastructure
   const messaging = new WhatsAppProvider();
   const executor  = new ClaudeCodeExecutor({
-    maxInvocations: 15,
+    maxInvocations: 60,
     timeoutMs: 3_600_000,  // 60 min — complex coding tasks regularly exceed the old 5 min default
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
