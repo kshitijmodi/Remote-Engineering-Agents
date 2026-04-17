@@ -1,5 +1,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { buildContentBlocksFromAttachments } = require('../utils/MultimodalHandler');
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -105,19 +107,42 @@ class ClaudeCodeExecutor {
     this.invocations += 1;
     const invocationIndex = this.invocations;
 
-    // Build multimodal content blocks when media is provided.
-    // Links that returned readable text are injected as text blocks;
-    // image/PDF attachments become typed content blocks for Claude vision/document API.
-    const mediaBlocks = buildMultimodalBlocks(media);
-    const isMultimodal = mediaBlocks.length > 0;
+    // Save attachments to temp files so Claude can read them via its Read tool.
+    // Track paths for cleanup after the run.
+    const tempFiles = [];
+    const attachmentContext = [];
 
-    // Prompt is passed via stdin to avoid shell argument escaping issues on Windows.
-    // When multimodal content is present we switch to --input-format json so that
-    // image and document content blocks can be included alongside the text prompt.
+    if (Array.isArray(media?.attachments) && media.attachments.length > 0) {
+      for (const attachment of media.attachments) {
+        if (!attachment.data) continue;
+        const ext = attachment.mimeType === 'application/pdf' ? '.pdf'
+          : attachment.mimeType === 'image/png'  ? '.png'
+          : attachment.mimeType === 'image/jpeg' ? '.jpg'
+          : attachment.mimeType === 'image/webp' ? '.webp'
+          : attachment.mimeType === 'image/gif'  ? '.gif'
+          : '.bin';
+        const tmpPath = path.join(os.tmpdir(), `rea_attachment_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+        try {
+          fs.writeFileSync(tmpPath, Buffer.from(attachment.data, 'base64'));
+          tempFiles.push(tmpPath);
+          if (attachment.type === 'pdf') {
+            attachmentContext.push(`The user attached a PDF document. It has been saved to: ${tmpPath}\nUse the Read tool to read its contents.`);
+          } else {
+            attachmentContext.push(`The user attached an image (${attachment.mimeType}). It has been saved to: ${tmpPath}\nNote: The Read tool can inspect the file but cannot visually interpret image pixels.`);
+          }
+        } catch (err) {
+          console.warn('[ClaudeCodeExecutor] Failed to save attachment to temp file:', err.message);
+        }
+      }
+    }
+
+    // Build link context (fetched webpage text)
+    const mediaBlocks = buildMultimodalBlocks(media);
+
     const args = [
       '--print',
       '--output-format', 'stream-json',
-      '--input-format', isMultimodal ? 'json' : 'text',
+      '--input-format', 'text',
       '--dangerously-skip-permissions',
       '--no-session-persistence',
       '--verbose',
@@ -158,17 +183,26 @@ class ClaudeCodeExecutor {
       // Write prompt/content to stdin, then close.
       // Multimodal: send a JSON messages array with mixed content blocks.
       // Text-only: send the prompt as plain text (default mode).
-      if (isMultimodal) {
-        const contentBlocks = [
-          { type: 'text', text: safePrompt },
-          ...mediaBlocks,
-        ];
-        const messages = [{ role: 'user', content: contentBlocks }];
-        proc.stdin.write(JSON.stringify(messages));
-      } else {
-        proc.stdin.write(safePrompt);
-      }
-      proc.stdin.end();
+      // Suppress EPIPE/EOF errors on stdin — these are non-fatal if the process
+      // exits before we finish writing (e.g. immediate error from the CLI).
+      proc.stdin.on('error', (err) => {
+        console.warn('[ClaudeCodeExecutor] stdin write error:', err.code ?? err.message);
+      });
+
+      // Build full prompt: user prompt + attachment file paths + fetched link text
+      const linkContext = mediaBlocks
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('\n\n');
+
+      const stdinPayload = [
+        safePrompt,
+        ...attachmentContext,
+        linkContext || '',
+      ].filter(Boolean).join('\n\n');
+
+      // Use end() to write+close in one shot — avoids partial-write EOF errors on large payloads
+      proc.stdin.end(stdinPayload, 'utf8');
 
       const events = [];
       let outputText = '';
@@ -220,6 +254,12 @@ class ClaudeCodeExecutor {
 
       proc.on('close', (code) => {
         clearTimeout(timer);
+
+        // Clean up temp attachment files
+        for (const tmpPath of tempFiles) {
+          try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+        }
+
         if (timedOut) return; // already rejected
 
         // Find the final result event

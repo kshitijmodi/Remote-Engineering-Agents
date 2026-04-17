@@ -90,23 +90,20 @@ class WhatsAppProvider extends MessagingLayer {
           const attachment = await msg.downloadMedia();
           if (attachment) {
             const metadata = extractMediaMetadata(attachment);
-            media = [{ ...metadata, _raw: attachment }];
+            media = [metadata];
           }
         } catch (err) {
           console.warn('[WhatsApp] Failed to download media:', err.message);
         }
       }
 
-      this._messageCallback({
-        ...buildMessage({
-          userId,
-          text: msg.body ? msg.body.trim() : '',
-          receivedAt: new Date(msg.timestamp * 1000),
-          media,
-          links,
-        }),
-        _raw: msg,
-      });
+      this._messageCallback(buildMessage({
+        userId,
+        text: msg.body ? msg.body.trim() : '',
+        receivedAt: new Date(msg.timestamp * 1000),
+        media,
+        links,
+      }));
     });
   }
 

@@ -44,7 +44,11 @@ class CommunicationAgent {
    * Start listening for messages.
    */
   start() {
-    this._messaging.onMessage((msg) => this._handleMessage(msg));
+    this._messaging.onMessage((msg) => {
+      this._handleMessage(msg).catch((err) => {
+        console.error('[CommunicationAgent] Unhandled error in message handler:', err.message);
+      });
+    });
     console.log('[CommunicationAgent] Listening. Whitelist:', [...this._allowed]);
   }
 
@@ -222,12 +226,17 @@ class CommunicationAgent {
     // Multimodal context object forwarded to all handlers that accept it
     const multimodal = { media, urls: allUrls };
 
-    switch (intent) {
-      case 'STATUS':   this._handlers.onStatus?.(userId);                              break;
-      case 'QUESTION': this._handlers.onQuery?.(userId, effectiveText, multimodal);    break;
-      case 'PUSH':     this._handlers.onPush?.(userId, null);                          break;
-      default:         this._handlers.onTask?.(userId, effectiveText, multimodal);
-    }
+    const dispatch = (() => {
+      switch (intent) {
+        case 'STATUS':   return this._handlers.onStatus?.(userId);
+        case 'QUESTION': return this._handlers.onQuery?.(userId, effectiveText, multimodal);
+        case 'PUSH':     return this._handlers.onPush?.(userId, null);
+        default:         return this._handlers.onTask?.(userId, effectiveText, multimodal);
+      }
+    })();
+    Promise.resolve(dispatch).catch((err) => {
+      console.error(`[CommunicationAgent] Handler error (intent=${intent}):`, err.message);
+    });
   }
 
   // Fallback heuristic used only when no LLM classifier is provided

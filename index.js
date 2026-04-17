@@ -15,6 +15,7 @@ const { ContextAgent } = require('./src/agents/ContextAgent');
 const { IntentAgent } = require('./src/agents/IntentAgent');
 const { formatStepInProgress } = require('./src/utils/StatusFormatter');
 const { processLinksFromText } = require('./src/utils/LinkProcessor');
+const ExecutionStateManager = require('./src/utils/ExecutionStateManager');
 const fs = require('fs');
 const path = require('path');
 
@@ -90,10 +91,25 @@ async function main() {
     }
   }
 
+  // ── Resume context detection ──────────────────────────────────────────────
+  // Check whether a prior budget-exhausted run left a persisted execution state.
+  // OrchestratorAgent loads the same file in its constructor; surfacing the flag
+  // here lets index.js make startup decisions and pass explicit resume context.
+  const _execStateManager = new ExecutionStateManager();
+  const _savedExecState   = _execStateManager.loadProgress();
+  const isResume          = !!(_savedExecState && _savedExecState.currentAgentIndex > 0);
+  if (isResume) {
+    console.log(
+      `[Startup] Saved execution state detected — will resume from stage index ` +
+      `${_savedExecState.currentAgentIndex} (task: ${_savedExecState.taskId ?? 'unknown'})`
+    );
+  }
+
   // Orchestrator
   const orchestrator = new OrchestratorAgent(
-    { planning, execution, debugging, review, pr, logging, executor, metrics },
-    reliableSend
+    { planning, execution, debugging, review, pr, logging, executor, metrics, isResume },
+    reliableSend,
+    _execStateManager
   );
 
   // ── Checkpoint resume on startup ──────────────────────────────────────────
@@ -165,8 +181,23 @@ async function main() {
       const target = repoPath || process.cwd();
       const contextBlock = target ? context.getContextBlock(target) : '';
       try {
+        // Build media context — attachments (images/PDFs) + any links in the question
+        const processedLinks = await processLinksFromText(question).catch(() => []);
+        const incomingLinks = (incomingMultimodal?.urls ?? []).map((u) =>
+          typeof u === 'string' ? { url: u, title: null, description: null } : u
+        );
+        const allLinks = [
+          ...processedLinks,
+          ...incomingLinks.filter((l) => !processedLinks.some((p) => p.url === l.url)),
+        ];
+        const safeMedia = (incomingMultimodal?.media ?? []).map(({ _raw, ...m }) => m);
+        const media = (safeMedia.length > 0 || allLinks.length > 0)
+          ? { attachments: safeMedia, links: allLinks }
+          : undefined;
+
         const result = await executor.run(contextBlock + question, target, {
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
+          media,
         });
         const answer = result.output || 'No response.';
         if (target) {
@@ -192,6 +223,11 @@ async function main() {
         return;
       }
 
+      // Fresh task start — wipe any leftover checkpoint/progress state so the
+      // pipeline always begins from agent index 0 rather than a stale resume point.
+      _execStateManager.clearCheckpoint();
+      _execStateManager.clearProgress();
+
       context.append(repoPath, 'user', taskText);
       const release = repoAgent.acquireLock(userId);
 
@@ -203,7 +239,7 @@ async function main() {
       const incomingLinks = incomingMultimodal?.urls
         ? incomingMultimodal.urls.map((u) => (typeof u === 'string' ? { url: u, title: null, description: null } : u))
         : [];
-      const incomingMedia = incomingMultimodal?.media ?? [];
+      const incomingMedia = (incomingMultimodal?.media ?? []).map(({ _raw, ...m }) => m);
 
       const allLinks = [
         ...processedLinks,
