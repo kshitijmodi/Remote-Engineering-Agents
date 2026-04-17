@@ -3,10 +3,30 @@ const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const { BudgetExceededError } = require('../claude/ClaudeCodeExecutor');
 const { formatProgressMessage, formatStageCompletion, formatElapsed, getStageDuration, formatPlan, formatStepProgress, formatCompletionRecap, formatConfirmationAck, formatConfirmationTimeout } = require('../utils/StatusFormatter');
+const ExecutionStateManager = require('../utils/ExecutionStateManager');
 const IS_WINDOWS = process.platform === 'win32';
 
 const MAX_RETRIES = 3;
 const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+// Maps each stage to a numeric index for progress persistence
+const STAGE_TO_INDEX = {
+  planning:               0,
+  awaiting_confirmation:  0,
+  coding:                 1,
+  testing:                2,
+  debugging:              3,
+  review:                 4,
+  pr_created:             5,
+};
+
+// Reverse map — used when resuming from a persisted index
+const INDEX_TO_STAGE = {
+  1: 'coding',
+  2: 'testing',
+  3: 'debugging',
+  4: 'review',
+};
 
 const STATES = {
   QUEUED:                 'queued',
@@ -48,8 +68,9 @@ class OrchestratorAgent extends EventEmitter {
    * @param {import('./LoggingAgent').LoggingAgent}     agents.logging
    * @param {import('../claude/ClaudeCodeExecutor').ClaudeCodeExecutor} agents.executor
    * @param {function(string, string): Promise<void>} notify  - send WhatsApp message to user
+   * @param {import('../utils/ExecutionStateManager')|null} [stateManager]  - optional shared ExecutionStateManager instance
    */
-  constructor(agents, notify) {
+  constructor(agents, notify, stateManager = null) {
     super();
     this._agents = agents;
     this._notify = notify;
@@ -57,6 +78,11 @@ class OrchestratorAgent extends EventEmitter {
     this._tasks = new Map();
     // userId → { taskId, resolve, sentAt }  — tracks in-flight plan confirmations
     this._pendingConfirmations = new Map();
+    // Execution state persistence — use injected instance or create a new one
+    this._stateManager = stateManager ?? new ExecutionStateManager();
+    this._savedState = this._stateManager.loadProgress();
+    // Load per-agent checkpoint data so it can be applied when resuming
+    this._checkpoints = this._loadCheckpoints();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -177,6 +203,24 @@ class OrchestratorAgent extends EventEmitter {
     const { logging } = this._agents;
     const TERMINAL = [STATES.PR_CREATED, STATES.FAILED, STATES.CANCELLED, STATES.PAUSED];
 
+    // If this is a brand-new task start but saved state exists, jump to the persisted stage
+    // instead of re-running planning. Clears the saved state so subsequent calls don't re-apply it.
+    if (task.status === STATES.QUEUED && this._savedState?.currentAgentIndex > 0) {
+      const resumeStage = INDEX_TO_STAGE[this._savedState.currentAgentIndex];
+      if (resumeStage) {
+        logging.log(task.taskId, 'INFO', `Resuming from saved state at stage "${resumeStage}" (index ${this._savedState.currentAgentIndex})`);
+        // Restore task fields (planSteps, lastTestOutput, etc.) from per-agent checkpoints
+        this._applyCheckpoints(task);
+        await this._notify(
+          task.userId,
+          `🔄 *Resuming from checkpoint* — skipping planning, continuing from *${resumeStage}* stage`
+        );
+        this._transitionStage(task, resumeStage);
+      }
+      this._savedState  = null; // consumed — do not apply again on re-entry
+      this._checkpoints = {};   // consumed
+    }
+
     try {
       // Proper state-machine loop — handles review → re-coding → testing cycles correctly
       while (!TERMINAL.includes(task.status)) {
@@ -223,6 +267,7 @@ class OrchestratorAgent extends EventEmitter {
         logging.log(task.taskId, 'ERROR', 'Task failed with error', { err: err.message });
         await this._notify(task.userId, `❌ *Task FAILED*: ${err.message}\nUse /logs for the full trace.`);
         logging.endTask(task.taskId);
+        this._stateManager.clearProgress();
         this._agents.metrics?.recordFailure(task.taskId, task.userId, err.message, task.retries, task.stageTiming);
       }
     }
@@ -325,6 +370,8 @@ class OrchestratorAgent extends EventEmitter {
     }
 
     this._transitionStage(task, STATES.CODING);
+    this._stateManager.saveCheckpoint('planning', { planSteps: task.planSteps });
+    this._saveExecutionState(task);
   }
 
   /** Returns a promise resolved by confirmPlan / modifyPlan / cancelTask, or timed out. */
@@ -428,6 +475,8 @@ class OrchestratorAgent extends EventEmitter {
       `${formatStageCompletion(STATES.CODING, task.stageTiming)}\n${formatProgressMessage(STATES.TESTING, task, this._budgetStr())}`
     );
     this._transitionStage(task, STATES.TESTING);
+    this._stateManager.saveCheckpoint('coding', { taskText: task.taskText, planSteps: task.planSteps });
+    this._saveExecutionState(task);
   }
 
   async _stageTesting(task) {
@@ -454,6 +503,8 @@ class OrchestratorAgent extends EventEmitter {
         `✅ *Tests passed*${testingTimeStr} (${result.passedCount}/${result.passedCount + result.failedCount})\n${formatProgressMessage(STATES.REVIEW, task, this._budgetStr())}`
       );
       this._transitionStage(task, STATES.REVIEW);
+      this._stateManager.saveCheckpoint('testing', { lastTestOutput: task.lastTestOutput });
+      this._saveExecutionState(task);
     } else {
       if (task.retries.debugging >= MAX_RETRIES) {
         task.status = STATES.FAILED;
@@ -462,6 +513,7 @@ class OrchestratorAgent extends EventEmitter {
           `❌ *Task FAILED* after ${MAX_RETRIES} debug attempts.\nError: ${result.details}\nUse /logs for full trace.`
         );
         this._agents.logging.endTask(task.taskId);
+        this._stateManager.clearProgress();
         this._agents.metrics?.recordFailure(task.taskId, task.userId, `Max debug retries (${MAX_RETRIES})`, task.retries, task.stageTiming);
         return;
       }
@@ -471,6 +523,7 @@ class OrchestratorAgent extends EventEmitter {
         `⚠️ *Tests failed* (${result.failedCount} failing)\n${formatProgressMessage(STATES.DEBUGGING, task, this._budgetStr())}\nAttempt ${task.retries.debugging}/${MAX_RETRIES}`
       );
       this._transitionStage(task, STATES.DEBUGGING);
+      this._saveExecutionState(task);
     }
   }
 
@@ -494,6 +547,8 @@ class OrchestratorAgent extends EventEmitter {
       `${formatStageCompletion(STATES.DEBUGGING, task.stageTiming)}\n${formatProgressMessage(STATES.TESTING, task, this._budgetStr())}`
     );
     this._transitionStage(task, STATES.TESTING);
+    this._stateManager.saveCheckpoint('debugging', { attempt: task.retries.debugging });
+    this._saveExecutionState(task);
   }
 
   async _stageReview(task) {
@@ -524,6 +579,7 @@ class OrchestratorAgent extends EventEmitter {
       );
       task.reviewNotes = result.reasons;
     }
+    this._stateManager.saveCheckpoint('review', { verdict: result.verdict, reasons: result.reasons, passed: result.passed });
     await this._stagePR(task);
   }
 
@@ -540,6 +596,7 @@ class OrchestratorAgent extends EventEmitter {
       const completionMsg = formatCompletionRecap(task, task.reviewResult, result);
       task.context?.append(task.repoPath, 'assistant', `Task completed: ${task.taskText}`);
       await this._notify(task.userId, completionMsg);
+      this._stateManager.clearProgress();
       this._agents.metrics?.recordSuccess(task.taskId, task.userId, task.retries, task.stageTiming);
     } catch (err) {
       logging.log(task.taskId, 'WARN', 'PR creation failed', { err: err.message });
@@ -549,6 +606,7 @@ class OrchestratorAgent extends EventEmitter {
         `Task complete! Code changes are in: ${task.repoPath}\n` +
         `PR creation failed: ${err.message}\nCommit and push manually if needed.`
       );
+      this._stateManager.clearProgress();
       this._agents.metrics?.recordSuccess(task.taskId, task.userId, task.retries, task.stageTiming);
     }
 
@@ -589,6 +647,19 @@ class OrchestratorAgent extends EventEmitter {
     });
   }
 
+  _saveExecutionState(task) {
+    const currentAgentIndex = STAGE_TO_INDEX[task.status] ?? 0;
+    const completedAgents = Object.entries(STAGE_TO_INDEX)
+      .filter(([, idx]) => idx < currentAgentIndex)
+      .map(([stage]) => stage)
+      .filter((v, i, a) => a.indexOf(v) === i); // dedupe
+    this._stateManager.saveProgress({
+      currentAgentIndex,
+      completedAgents,
+      taskId: task.taskId,
+    });
+  }
+
   _budgetStr() {
     const b = this._agents.executor.budgetStatus;
     return `${b.current}/${b.max}`;
@@ -605,6 +676,31 @@ class OrchestratorAgent extends EventEmitter {
       if (task.userId === userId) return task;
     }
     return null;
+  }
+
+  /** Load all per-agent checkpoints from disk into a stage-keyed map. */
+  _loadCheckpoints() {
+    const stages = ['planning', 'coding', 'testing', 'debugging', 'review'];
+    const result = {};
+    for (const stage of stages) {
+      const cp = this._stateManager.loadCheckpoint(stage);
+      if (cp) result[stage] = cp;
+    }
+    return result;
+  }
+
+  /**
+   * Restore task fields from previously loaded checkpoints so that
+   * resumed runs have the same context as the original run.
+   * @param {object} task
+   */
+  _applyCheckpoints(task) {
+    if (this._checkpoints.planning?.output?.planSteps) {
+      task.planSteps = this._checkpoints.planning.output.planSteps;
+    }
+    if (this._checkpoints.testing?.output?.lastTestOutput) {
+      task.lastTestOutput = this._checkpoints.testing.output.lastTestOutput;
+    }
   }
 
   _snapshot(task) {

@@ -131,7 +131,9 @@ function buildPdfBlock(pdfMetadata) {
 function buildContentBlocksFromAttachments(attachments) {
   const blocks = [];
   for (const attachment of attachments) {
-    const meta = extractMediaMetadata(attachment);
+    // Attachments from WhatsAppProvider are already normalized (have a `type` field).
+    // Raw WhatsApp attachment objects use `mimetype` (lowercase). Handle both.
+    const meta = attachment.type ? attachment : extractMediaMetadata(attachment);
     if (meta.type === 'image' && meta.data) {
       blocks.push(buildImageBlock(meta));
     } else if (meta.type === 'pdf' && meta.data) {
