@@ -74,7 +74,6 @@ class WhatsAppProvider extends MessagingLayer {
 
       // Use the @c.us ID for sending replies if available, fall back to msg.from
       const userId = msg.author || msg.from;
-      console.log(`[WhatsApp] Incoming from ${userId} (${msg.type}): "${msg.body?.slice(0, 60)}"`);
 
       // Extract any URLs present in the message text and wrap as LinkObjects
       const links = msg.body

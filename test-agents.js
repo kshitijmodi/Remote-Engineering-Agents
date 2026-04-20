@@ -418,6 +418,7 @@ async function main() {
   console.log('PASS: IntentAgent multimodal context summarised in classification prompt');
 
   console.log('\nAll agent tests passed.');
+  process.exit(0);
 }
 
 main().catch(err => { console.error('FAILED:', err); process.exit(1); });
