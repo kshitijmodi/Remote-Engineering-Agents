@@ -1,4 +1,5 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, Buttons, List } = require('whatsapp-web.js');
+const { buildQuickReply, buildListMessage } = require('../ui/WhatsAppButtons');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
@@ -6,7 +7,7 @@ const { MessagingLayer, buildMessage } = require('./MessagingLayer');
 const { extractMediaMetadata } = require('../utils/MultimodalHandler');
 
 // Message types that may carry media or text we want to process
-const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document']);
+const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document', 'buttons_response', 'list_response']);
 
 // Simple URL extractor — captures http/https links from free text
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g;
@@ -96,13 +97,37 @@ class WhatsAppProvider extends MessagingLayer {
         }
       }
 
-      this._messageCallback(buildMessage({
+      // Detect and parse button interaction responses.
+      // buttons_response  → user tapped a quick-reply button
+      // list_response     → user selected a row from a list message
+      let buttonInteraction = null;
+      if (msg.type === 'buttons_response') {
+        buttonInteraction = {
+          type: 'quick_reply',
+          buttonId: msg.selectedButtonId || null,
+          title: msg.body ? msg.body.trim() : null,
+        };
+      } else if (msg.type === 'list_response') {
+        buttonInteraction = {
+          type: 'list',
+          rowId: msg.selectedRowId || null,
+          title: msg.body ? msg.body.trim() : null,
+        };
+      }
+
+      const normalized = buildMessage({
         userId,
         text: msg.body ? msg.body.trim() : '',
         receivedAt: new Date(msg.timestamp * 1000),
         media,
         links,
-      }));
+      });
+
+      // Attach button interaction data so downstream handlers can route
+      // button selections without re-parsing free text.
+      normalized.buttonInteraction = buttonInteraction;
+
+      this._messageCallback(normalized);
     });
   }
 
@@ -130,6 +155,52 @@ class WhatsAppProvider extends MessagingLayer {
       throw new Error('[WhatsApp] Cannot send — not connected');
     }
     await this._client.sendMessage(userId, text);
+  }
+
+  /**
+   * Send a quick-reply button message (up to 3 tappable buttons).
+   *
+   * @param {string} userId - WhatsApp chat ID (e.g. "447911123456@c.us")
+   * @param {{ type: 'quick_reply', payload: object }} quickReply
+   *   Payload produced by buildQuickReply() from src/ui/WhatsAppButtons.js
+   */
+  async sendQuickReply(userId, quickReply) {
+    if (!this._connected) {
+      throw new Error('[WhatsApp] Cannot send — not connected');
+    }
+    const { payload } = quickReply;
+    const buttons = payload.action.buttons.map((btn) => ({
+      id:   btn.reply.id,
+      body: btn.reply.title,
+    }));
+    const title  = payload.header ? payload.header.text : '';
+    const footer = payload.footer ? payload.footer.text : '';
+    const msg = new Buttons(payload.body.text, buttons, title, footer);
+    await this._client.sendMessage(userId, msg);
+  }
+
+  /**
+   * Send a list message (sectioned menu with a list-picker button).
+   *
+   * @param {string} userId - WhatsApp chat ID (e.g. "447911123456@c.us")
+   * @param {{ type: 'list', payload: object }} listMessage
+   *   Payload produced by buildListMessage() from src/ui/WhatsAppButtons.js
+   */
+  async sendListMessage(userId, listMessage) {
+    if (!this._connected) {
+      throw new Error('[WhatsApp] Cannot send — not connected');
+    }
+    const { payload } = listMessage;
+    const title  = payload.header ? payload.header.text : '';
+    const footer = payload.footer ? payload.footer.text : '';
+    const msg = new List(
+      payload.body.text,
+      payload.action.button,
+      payload.action.sections,
+      title,
+      footer,
+    );
+    await this._client.sendMessage(userId, msg);
   }
 
   getStatus() {

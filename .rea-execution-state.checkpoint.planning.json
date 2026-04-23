@@ -4,29 +4,37 @@
     "planSteps": [
       {
         "id": 1,
-        "description": "Create workspace/ArthaOS directory"
+        "description": "Create src/ui/WhatsAppButtons.js - utility module for building WhatsApp quick reply and list message payloads"
       },
       {
         "id": 2,
-        "description": "Initialize git repository with git init"
+        "description": "Modify src/messaging/WhatsAppProvider.js - add sendQuickReply() and sendListMessage() methods to send button messages"
       },
       {
         "id": 3,
-        "description": "Create README.md with project name and placeholder content"
+        "description": "Create src/ui/ConfirmationPrompts.js - helper functions for common button scenarios (confirmCancelModify, yesNo, etc.)"
       },
       {
         "id": 4,
-        "description": "Create .gitignore file with basic exclusions"
+        "description": "Update src/messaging/WhatsAppProvider.js webhook handler to detect and parse button response payloads"
       },
       {
         "id": 5,
-        "description": "Create package.json with project metadata"
+        "description": "Create src/messaging/ButtonResponseHandler.js - processes incoming button interactions and routes to appropriate agents"
       },
       {
         "id": 6,
-        "description": "Make initial commit with \"Initial commit\""
+        "description": "Modify src/agents/CommunicationAgent.js to use button prompts instead of text-based confirmations"
+      },
+      {
+        "id": 7,
+        "description": "Update src/messaging/MessagingLayer.js to integrate button response handling into the message flow"
+      },
+      {
+        "id": 8,
+        "description": "Add button interaction tests to test-agents.js covering quick replies, list selections, and confirm/cancel/modify workflows"
       }
     ]
   },
-  "timestamp": 1776716388985
+  "timestamp": 1776920182044
 }
