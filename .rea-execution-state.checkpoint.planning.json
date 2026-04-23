@@ -4,37 +4,37 @@
     "planSteps": [
       {
         "id": 1,
-        "description": "Create src/ui/WhatsAppButtons.js - utility module for building WhatsApp quick reply and list message payloads"
+        "description": "Integrate ButtonResponseHandler into MessagingLayer.onMessage() to intercept button responses before text routing"
       },
       {
         "id": 2,
-        "description": "Modify src/messaging/WhatsAppProvider.js - add sendQuickReply() and sendListMessage() methods to send button messages"
+        "description": "Update CommunicationAgent to send confirmation prompts via ConfirmationPrompts helpers instead of plain text"
       },
       {
         "id": 3,
-        "description": "Create src/ui/ConfirmationPrompts.js - helper functions for common button scenarios (confirmCancelModify, yesNo, etc.)"
+        "description": "Register button handlers (onConfirm, onCancel, onModify, onChoice) in CommunicationAgent for action routing"
       },
       {
         "id": 4,
-        "description": "Update src/messaging/WhatsAppProvider.js webhook handler to detect and parse button response payloads"
+        "description": "Update ExecutionAgent to use confirmCancelModify() when presenting execution drafts to users"
       },
       {
         "id": 5,
-        "description": "Create src/messaging/ButtonResponseHandler.js - processes incoming button interactions and routes to appropriate agents"
+        "description": "Update PlanningAgent to use confirmCancel() when awaiting plan approval"
       },
       {
         "id": 6,
-        "description": "Modify src/agents/CommunicationAgent.js to use button prompts instead of text-based confirmations"
+        "description": "Add Template button support to WhatsAppButtons.js for approval workflows requiring pre-approved templates"
       },
       {
         "id": 7,
-        "description": "Update src/messaging/MessagingLayer.js to integrate button response handling into the message flow"
+        "description": "Create unit tests in test-agents.js for button flow (send prompt → parse response → route handler)"
       },
       {
         "id": 8,
-        "description": "Add button interaction tests to test-agents.js covering quick replies, list selections, and confirm/cancel/modify workflows"
+        "description": "Document button ID conventions and handler signatures in README.md"
       }
     ]
   },
-  "timestamp": 1776920182044
+  "timestamp": 1776950296894
 }

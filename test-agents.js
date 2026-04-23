@@ -617,6 +617,145 @@ async function main() {
   console.assert(unknownRouted === false, 'ButtonResponseHandler: unknown button ID returns false');
   console.log('PASS: ButtonResponseHandler unknown button ID → false');
 
+  // ── End-to-end button flow: build prompt → parse response → route handler ─
+  //
+  // Flow mirrors the real system:
+  //   1. Agent calls confirmCancelModify() to build the prompt and extract the button IDs.
+  //   2. User taps a button → WhatsApp delivers a buttons_response message.
+  //      parseButtonResponse() checks whether the raw message IS a button response.
+  //   3. WhatsAppProvider normalizes the raw message into a buttonInteraction object
+  //      ({ buttonId, title }) matching the shape ButtonResponseHandler.handle() expects.
+  //   4. ButtonResponseHandler routes to the registered callback.
+
+  // Step 1: build a confirmCancelModify prompt (simulates what PlanningAgent sends)
+  const e2ePrompt = confirmCancelModify('Deploy v3.0 to staging?');
+  console.assert(e2ePrompt.type === 'quick_reply', 'e2e button flow: prompt type is quick_reply');
+  const e2eButtons = e2ePrompt.payload.action.buttons;
+  console.assert(e2eButtons.length === 3, 'e2e button flow: 3 buttons in prompt');
+
+  // Step 2: simulate WhatsApp delivering a buttons_response for the "Confirm" button.
+  //   parseButtonResponse() returns non-null, confirming this is a button interaction.
+  const e2eRawReply = {
+    type: 'buttons_response',
+    selectedButtonId: e2eButtons[0].reply.id,  // 'ccm_confirm'
+    body: e2eButtons[0].reply.title,            // '✅ Confirm'
+  };
+  const e2eParsed = parseButtonResponse(e2eRawReply);
+  console.assert(e2eParsed !== null,                  'e2e button flow: parseButtonResponse detects button interaction');
+  console.assert(e2eParsed.type === 'button_reply',   'e2e button flow: parsed type is button_reply');
+  console.assert(e2eParsed.id   === 'ccm_confirm',    'e2e button flow: parsed id is ccm_confirm');
+
+  // Step 3: WhatsAppProvider normalizes into the buttonInteraction shape that
+  //   handle() consumes — { buttonId, title } for quick-reply interactions.
+  const e2eInteraction = {
+    type: 'quick_reply',
+    buttonId: e2eRawReply.selectedButtonId,   // 'ccm_confirm'
+    title:    e2eRawReply.body,               // '✅ Confirm'
+  };
+
+  // Step 4: route through ButtonResponseHandler
+  let e2eConfirmedUser = null;
+  const e2eHandler = new ButtonResponseHandler({ onConfirm: (uid) => { e2eConfirmedUser = uid; } });
+  const e2eRouted = e2eHandler.handle('karen@c.us', e2eInteraction);
+  console.assert(e2eRouted === true,                  'e2e button flow: handler returns true (routed)');
+  console.assert(e2eConfirmedUser === 'karen@c.us',   'e2e button flow: onConfirm called with correct userId');
+  console.log('PASS: e2e button flow confirmCancelModify (confirm path)');
+
+  // ── End-to-end: choiceList prompt → list response → onChoice handler ──────
+  // Step 1: build a choiceList prompt (simulates what CommunicationAgent sends)
+  const e2eChoicePrompt = choiceList('Select an action', ['Add feature', 'Fix bug', 'Write tests']);
+  const e2eRows = e2eChoicePrompt.payload.action.sections[0].rows;
+  console.assert(e2eRows.length === 3, 'e2e choice flow: 3 rows in list prompt');
+
+  // Step 2: simulate WhatsApp delivering a list_response for the second option ("Fix bug")
+  const e2eListRaw = {
+    type: 'list_response',
+    selectedRowId: e2eRows[1].id,   // 'choice_1'
+    body: e2eRows[1].title,         // 'Fix bug'
+  };
+  const e2eListParsed = parseButtonResponse(e2eListRaw);
+  console.assert(e2eListParsed !== null,               'e2e choice flow: parseButtonResponse detects list interaction');
+  console.assert(e2eListParsed.type === 'list_reply',  'e2e choice flow: parsed type is list_reply');
+  console.assert(e2eListParsed.id   === 'choice_1',    'e2e choice flow: parsed id is choice_1');
+  console.assert(e2eListParsed.title === 'Fix bug',    'e2e choice flow: parsed title matches selection');
+
+  // Step 3: WhatsAppProvider normalizes into the buttonInteraction shape — { rowId, title }
+  const e2eListInteraction = {
+    type: 'list',
+    rowId: e2eListRaw.selectedRowId,   // 'choice_1'
+    title: e2eListRaw.body,            // 'Fix bug'
+  };
+
+  // Step 4: route to onChoice handler
+  let e2eChoiceResult = null;
+  const e2eChoiceHandler = new ButtonResponseHandler({
+    onChoice: (uid, idx, title) => { e2eChoiceResult = { uid, idx, title }; },
+  });
+  const e2eListRouted = e2eChoiceHandler.handle('liam@c.us', e2eListInteraction);
+  console.assert(e2eListRouted === true,               'e2e choice flow: handler returns true (routed)');
+  console.assert(e2eChoiceResult?.uid   === 'liam@c.us', 'e2e choice flow: onChoice receives correct userId');
+  console.assert(e2eChoiceResult?.idx   === 1,           'e2e choice flow: onChoice receives correct index');
+  console.assert(e2eChoiceResult?.title === 'Fix bug',   'e2e choice flow: onChoice receives correct title');
+  console.log('PASS: e2e button flow choiceList (list response path)');
+
+  // ── MessagingLayer._dispatchMessage(): button intercept stops text callback ─
+  const { MessagingLayer } = require('./src/messaging/MessagingLayer');
+
+  // Concrete subclass just to access the protected _dispatchMessage
+  class TestMessagingLayer extends MessagingLayer {
+    onMessage(cb) { this._messageCallback = cb; }
+  }
+  const ml = new TestMessagingLayer();
+
+  let textCallbackFired = false;
+  ml.onMessage(() => { textCallbackFired = true; });
+
+  let mlConfirmedUser = null;
+  const mlBrh = new ButtonResponseHandler({ onConfirm: (uid) => { mlConfirmedUser = uid; } });
+  ml.registerButtonResponseHandler(mlBrh);
+
+  // Dispatch a message with a recognised button interaction — text callback must NOT fire
+  const mlBtnMsg = buildMessage({
+    userId: 'mia@c.us',
+    text: '',
+    buttonInteraction: { buttonId: 'ccm_confirm', title: '✅ Confirm' },
+  });
+  ml._dispatchMessage(mlBtnMsg);
+  console.assert(mlConfirmedUser    === 'mia@c.us', 'MessagingLayer._dispatchMessage: routes button to handler');
+  console.assert(textCallbackFired  === false,       'MessagingLayer._dispatchMessage: text callback NOT called for button');
+  console.log('PASS: MessagingLayer._dispatchMessage intercepts button interaction');
+
+  // ── MessagingLayer._dispatchMessage(): unrecognised button falls through ───
+  let fallThruTextFired = false;
+  const ml2 = new TestMessagingLayer();
+  ml2.onMessage(() => { fallThruTextFired = true; });
+  const ml2Brh = new ButtonResponseHandler({});  // no handlers registered
+  ml2.registerButtonResponseHandler(ml2Brh);
+
+  const ml2Msg = buildMessage({
+    userId: 'noah@c.us',
+    text: 'hello',
+    buttonInteraction: { buttonId: 'unknown_xyz', title: 'Mystery' },
+  });
+  ml2._dispatchMessage(ml2Msg);
+  console.assert(fallThruTextFired === true, 'MessagingLayer._dispatchMessage: unrecognised button falls through to text callback');
+  console.log('PASS: MessagingLayer._dispatchMessage unrecognised button falls through to text callback');
+
+  // ── MessagingLayer._dispatchMessage(): plain text message (no interaction) ─
+  let plainTextFired = false;
+  const ml3 = new TestMessagingLayer();
+  ml3.onMessage(() => { plainTextFired = true; });
+  const ml3Msg = buildMessage({ userId: 'olivia@c.us', text: 'plain text message' });
+  ml3._dispatchMessage(ml3Msg);
+  console.assert(plainTextFired === true, 'MessagingLayer._dispatchMessage: plain text message reaches text callback');
+  console.log('PASS: MessagingLayer._dispatchMessage plain text message reaches text callback');
+
+  // ── MessagingLayer.registerButtonResponseHandler(): rejects non-handler ────
+  let registerThrew = false;
+  try { ml3.registerButtonResponseHandler({}); } catch { registerThrew = true; }
+  console.assert(registerThrew === true, 'MessagingLayer.registerButtonResponseHandler: throws for non-ButtonResponseHandler');
+  console.log('PASS: MessagingLayer.registerButtonResponseHandler rejects invalid handler');
+
   console.log('\nAll agent tests passed.');
   process.exit(0);
 }

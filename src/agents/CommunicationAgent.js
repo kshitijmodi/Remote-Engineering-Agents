@@ -7,9 +7,12 @@ const {
 const { MessageMedia } = require('whatsapp-web.js');
 const {
   confirmCancelModify,
+  confirmCancel,
   yesNo,
   retryCancel,
+  choiceList,
 } = require('../ui/ConfirmationPrompts');
+const { ButtonResponseHandler } = require('../messaging/ButtonResponseHandler');
 
 /**
  * CommunicationAgent
@@ -43,6 +46,17 @@ class CommunicationAgent {
     this._allowed = new Set(allowedNumbers);
     this._handlers = handlers;
     this._classify = classify;
+
+    // Wire button interactions to the appropriate action handlers
+    this._buttonHandler = new ButtonResponseHandler({
+      onConfirm: (userId) => this._handlers.onConfirm?.(userId),
+      onCancel:  (userId) => this._handlers.onCancel?.(userId),
+      onModify:  (userId, hint) => this._handlers.onModify?.(userId, hint),
+      onChoice:  (userId, index, title) => this._handlers.onChoice?.(userId, index, title),
+      onYes:     (userId) => (this._handlers.onYes ?? this._handlers.onConfirm)?.(userId),
+      onNo:      (userId) => (this._handlers.onNo  ?? this._handlers.onCancel)?.(userId),
+      onRetry:   (userId) => this._handlers.onRetry?.(userId),
+    });
   }
 
   /**
@@ -193,6 +207,35 @@ class CommunicationAgent {
   }
 
   /**
+   * Send a confirm/cancel button prompt to the user (two-option variant, no modify).
+   * Falls back to plain text if the provider does not support buttons.
+   * @param {string} userId
+   * @param {string} bodyText - Summary of the pending action.
+   * @param {object} [opts]   - Forwarded to ConfirmationPrompts.confirmCancel()
+   */
+  async sendConfirmCancelPrompt(userId, bodyText, opts = {}) {
+    const prompt = confirmCancel(bodyText, opts);
+    await this._sendButtonPrompt(userId, prompt).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send confirm/cancel prompt:', err.message);
+    });
+  }
+
+  /**
+   * Send a generic choice list to the user.
+   * Falls back to plain text if the provider does not support list messages.
+   * @param {string} userId
+   * @param {string} question   - The question / instruction shown in the body.
+   * @param {string[]} choices  - Array of choice labels (max 10).
+   * @param {object} [opts]     - Forwarded to ConfirmationPrompts.choiceList()
+   */
+  async sendChoicePrompt(userId, question, choices, opts = {}) {
+    const prompt = choiceList(question, choices, opts);
+    await this._sendButtonPrompt(userId, prompt).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send choice prompt:', err.message);
+    });
+  }
+
+  /**
    * Internal helper: dispatch a structured button prompt to the messaging layer.
    * Tries provider-specific button methods; falls back to plain text if unavailable.
    * @param {string} userId
@@ -273,17 +316,20 @@ class CommunicationAgent {
       (multimodalSuffix ? ` [+${multimodalSuffix}]` : '')
     );
 
-    // 2. Parse slash commands
+    // 2. Intercept button interactions before any text routing
+    if (this._buttonHandler.handleMessage(msg)) return;
+
+    // 3. Parse slash commands
     if (text && text.startsWith('/')) {
       await this._handleCommand(userId, text);
       return;
     }
 
-    // 3. If the message carries only media with no text, synthesize a placeholder
+    // 4. If the message carries only media with no text, synthesize a placeholder
     //    so intent classification still works and handlers receive something useful.
     const effectiveText = text || (mediaCount ? '[media attachment]' : '');
 
-    // 4. Natural language — classify intent with LLM (or fall back to heuristic)
+    // 5. Natural language — classify intent with LLM (or fall back to heuristic)
     let intent;
     if (this._classify) {
       try {

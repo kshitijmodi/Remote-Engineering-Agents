@@ -10,12 +10,15 @@
  */
 
 // Maximum constraints imposed by the WhatsApp Business API
-const MAX_QUICK_REPLY_BUTTONS = 3;
-const MAX_BUTTON_TITLE_LEN    = 20;
-const MAX_LIST_SECTIONS       = 10;
-const MAX_LIST_ROW_TITLE_LEN  = 24;
-const MAX_LIST_ROW_DESC_LEN   = 72;
-const MAX_LIST_BUTTON_LEN     = 20;
+const MAX_QUICK_REPLY_BUTTONS    = 3;
+const MAX_BUTTON_TITLE_LEN       = 20;
+const MAX_LIST_SECTIONS          = 10;
+const MAX_LIST_ROW_TITLE_LEN     = 24;
+const MAX_LIST_ROW_DESC_LEN      = 72;
+const MAX_LIST_BUTTON_LEN        = 20;
+const MAX_TEMPLATE_BUTTONS       = 3;   // max quick-reply buttons per template
+const MAX_TEMPLATE_PAYLOAD_LEN   = 128; // max payload string length per template button
+const MAX_TEMPLATE_PARAM_LEN     = 1024;
 
 /**
  * Build a quick-reply button payload.
@@ -134,6 +137,105 @@ function buildListMessage(bodyText, buttonLabel, sections, opts = {}) {
 }
 
 /**
+ * Build a Template message payload for approval workflows.
+ *
+ * Template messages are pre-approved by WhatsApp/Meta and can be sent
+ * outside the 24-hour messaging window, making them suitable for
+ * business-initiated approval requests.
+ *
+ * @param {string} templateName  - Approved template name (snake_case, e.g. "plan_approval").
+ * @param {string} languageCode  - BCP-47 language code (e.g. "en_US").
+ * @param {object} [opts]
+ * @param {Array<string>} [opts.bodyParams]
+ *   Ordered list of parameter strings to substitute into the template body
+ *   ({{1}}, {{2}}, …).
+ * @param {string} [opts.headerParam]
+ *   A single text parameter for a template header containing {{1}}.
+ * @param {Array<{payload: string, index?: number}>} [opts.buttons]
+ *   Quick-reply button overrides. Each entry:
+ *     payload — the string sent back in the webhook when the user taps the button
+ *               (max 128 chars). Acts as the button ID for handler routing.
+ *     index   — 0-based position matching the button slot in the approved template
+ *               (defaults to array position if omitted).
+ *   Maximum 3 quick-reply buttons.
+ * @returns {{ type: 'template', payload: object }}
+ *
+ * @example
+ * // Approval workflow: "plan_approval" template has body "Review your plan: {{1}}"
+ * // and two quick-reply buttons at index 0 ("Approve") and index 1 ("Cancel").
+ * buildTemplateMessage('plan_approval', 'en_US', {
+ *   bodyParams: ['Deploy to production'],
+ *   buttons: [
+ *     { payload: 'action:confirm:plan', index: 0 },
+ *     { payload: 'action:cancel:plan',  index: 1 },
+ *   ],
+ * });
+ */
+function buildTemplateMessage(templateName, languageCode, opts = {}) {
+  if (!templateName || typeof templateName !== 'string') {
+    throw new Error('buildTemplateMessage: templateName must be a non-empty string');
+  }
+  if (!languageCode || typeof languageCode !== 'string') {
+    throw new Error('buildTemplateMessage: languageCode must be a non-empty string');
+  }
+
+  const components = [];
+
+  // Header component (optional single text parameter)
+  if (opts.headerParam !== undefined) {
+    const param = String(opts.headerParam).slice(0, MAX_TEMPLATE_PARAM_LEN);
+    components.push({
+      type:       'header',
+      parameters: [{ type: 'text', text: param }],
+    });
+  }
+
+  // Body component (optional ordered positional parameters)
+  if (Array.isArray(opts.bodyParams) && opts.bodyParams.length > 0) {
+    components.push({
+      type:       'body',
+      parameters: opts.bodyParams.map(p => ({
+        type: 'text',
+        text: String(p).slice(0, MAX_TEMPLATE_PARAM_LEN),
+      })),
+    });
+  }
+
+  // Button components (quick-reply payload overrides)
+  if (Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+    if (opts.buttons.length > MAX_TEMPLATE_BUTTONS) {
+      throw new Error(`buildTemplateMessage: maximum ${MAX_TEMPLATE_BUTTONS} buttons allowed`);
+    }
+    opts.buttons.forEach((btn, i) => {
+      if (!btn.payload || typeof btn.payload !== 'string') {
+        throw new Error(`buildTemplateMessage: buttons[${i}].payload must be a non-empty string`);
+      }
+      const buttonIndex = btn.index !== undefined ? btn.index : i;
+      components.push({
+        type:       'button',
+        sub_type:   'quick_reply',
+        index:      String(buttonIndex),
+        parameters: [{
+          type:    'payload',
+          payload: btn.payload.slice(0, MAX_TEMPLATE_PAYLOAD_LEN),
+        }],
+      });
+    });
+  }
+
+  const payload = {
+    type: 'template',
+    template: {
+      name:     templateName,
+      language: { code: languageCode },
+      ...(components.length > 0 && { components }),
+    },
+  };
+
+  return { type: 'template', payload };
+}
+
+/**
  * Parse an incoming WhatsApp interactive webhook event and extract the
  * user's selection.
  *
@@ -157,7 +259,21 @@ function parseButtonResponse(message) {
       title: message.body || '',
     };
   }
+  // Template quick-reply buttons arrive as interactive messages with
+  // button_reply sub-type; the payload field carries the string set in
+  // buildTemplateMessage's buttons[].payload.
+  if (
+    message.type === 'interactive' &&
+    message.interactive?.type === 'button_reply'
+  ) {
+    const reply = message.interactive.button_reply;
+    return {
+      type:  'template_button_reply',
+      id:    reply?.payload || reply?.id || '',
+      title: reply?.title || '',
+    };
+  }
   return null;
 }
 
-module.exports = { buildQuickReply, buildListMessage, parseButtonResponse };
+module.exports = { buildQuickReply, buildListMessage, buildTemplateMessage, parseButtonResponse };

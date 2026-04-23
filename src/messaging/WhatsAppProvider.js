@@ -69,7 +69,7 @@ class WhatsAppProvider extends MessagingLayer {
     // fromMe=false means someone else sent this — no self-loop risk.
     // Using async so we can await media downloads before invoking the callback.
     this._client.on('message', async (msg) => {
-      if (!this._messageCallback) return;
+      if (!this._messageCallback && !this._buttonResponseHandler) return;
       if (!SUPPORTED_MSG_TYPES.has(msg.type)) return;
       if (msg.fromMe) return;
 
@@ -127,7 +127,7 @@ class WhatsAppProvider extends MessagingLayer {
       // button selections without re-parsing free text.
       normalized.buttonInteraction = buttonInteraction;
 
-      this._messageCallback(normalized);
+      this._dispatchMessage(normalized);
     });
   }
 
