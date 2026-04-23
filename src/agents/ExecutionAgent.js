@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
+const { confirmCancelModify } = require('../ui/ConfirmationPrompts');
 
 /**
  * ExecutionAgent
@@ -112,6 +113,30 @@ Instructions:
       budget: this._executor.budgetStatus,
       exitCode: 0,
     };
+  }
+
+  /**
+   * Build a confirmCancelModify button prompt summarising what is about to be
+   * implemented.  The caller (OrchestratorAgent) sends this to the user and
+   * awaits confirmation before calling code().
+   *
+   * @param {string} task                                   - Natural language task description.
+   * @param {Array<{id: number, description: string}>} [steps] - Structured plan steps (optional).
+   * @returns {{ type: 'quick_reply', payload: object }}    - Button prompt payload.
+   */
+  buildExecutionDraftPrompt(task, steps = []) {
+    const stepLines = steps.length
+      ? steps.map((s) => `${s.id}. ${s.description}`).join('\n')
+      : task;
+    // Truncate long previews so the WhatsApp body stays readable
+    const preview = stepLines.length <= 300 ? stepLines : `${stepLines.slice(0, 297)}...`;
+    return confirmCancelModify(
+      `🔧 *Ready to implement:*\n\n${preview}`,
+      {
+        header: 'Execute task?',
+        footer: 'Reply /confirm, /cancel, or /modify <changes>',
+      }
+    );
   }
 
   /**

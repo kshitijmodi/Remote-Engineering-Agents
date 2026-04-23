@@ -29,6 +29,7 @@ coding, testing, debugging, and PR creation — all using Claude Code CLI as the
 - [Agents & Responsibilities](#agents--responsibilities)
 - [AI Agents Overview](#ai-agents-overview)
 - [Slash Commands](#slash-commands)
+- [Button Interaction System](#button-interaction-system)
 - [Token Budget System](#token-budget-system)
 - [Task Object (Shared State)](#task-object-shared-state)
 - [Workspace Structure](#workspace-structure)
@@ -497,6 +498,142 @@ Reviews the code diff produced by the task before a PR is created.
 
 ---
 
+## Button Interaction System
+
+REA presents interactive WhatsApp buttons (quick replies and list pickers) at key decision points instead of asking the user to type slash commands. The pipeline that powers this is split across three files:
+
+| File | Role |
+|---|---|
+| `src/ui/WhatsAppButtons.js` | Builds raw WhatsApp API payloads (`buildQuickReply`, `buildListMessage`, `buildTemplateMessage`) |
+| `src/ui/ConfirmationPrompts.js` | Pre-built helper functions that wrap the builders with standard button IDs |
+| `src/messaging/ButtonResponseHandler.js` | Receives button interactions from `MessagingLayer` and routes them to registered callbacks |
+
+---
+
+### Button ID Conventions
+
+Every button carries a short `id` string that is returned in the webhook when the user taps it. `ButtonResponseHandler` matches on these IDs to call the right handler. All IDs are defined in `ConfirmationPrompts.js` and must not be changed without updating the handler routing in `ButtonResponseHandler.js`.
+
+| ID | Prompt helper | Meaning |
+|---|---|---|
+| `confirm_yes` | `yesNo()` | Affirmative answer on a Yes/No prompt |
+| `confirm_no` | `yesNo()` | Negative answer on a Yes/No prompt |
+| `ccm_confirm` | `confirmCancel()`, `confirmCancelModify()` | User approved the proposed action |
+| `ccm_cancel` | `confirmCancel()`, `confirmCancelModify()` | User cancelled the proposed action |
+| `ccm_modify` | `confirmCancelModify()` | User wants to modify before proceeding |
+| `choice_<N>` | `choiceList()` | User selected the Nth item (0-based) from a list |
+| `retry_retry` | `retryCancel()` | User wants to retry the failed operation |
+| `retry_cancel` | `retryCancel()` | User cancelled after a failure |
+
+For **template messages** (sent outside the 24-hour window via `buildTemplateMessage`), each quick-reply button slot carries a `payload` string instead of an `id`. Use the same `action:confirm:<context>` / `action:cancel:<context>` format to keep them consistent with the above conventions:
+
+```js
+buildTemplateMessage('plan_approval', 'en_US', {
+  bodyParams: ['Deploy to production'],
+  buttons: [
+    { payload: 'action:confirm:plan', index: 0 },
+    { payload: 'action:cancel:plan',  index: 1 },
+  ],
+});
+```
+
+Template button payloads are surfaced on the normalized message object with `type: 'template_button_reply'` and their `id` field set to the `payload` string, so custom handler logic outside `ButtonResponseHandler` can inspect them directly.
+
+---
+
+### ConfirmationPrompts helpers
+
+All helpers live in `src/ui/ConfirmationPrompts.js` and return a `{ type, payload }` object ready to pass to `WhatsAppProvider.sendQuickReply()` or `WhatsAppProvider.sendListMessage()`.
+
+```js
+const { yesNo, confirmCancel, confirmCancelModify, choiceList, retryCancel } = require('./ui/ConfirmationPrompts');
+
+// Simple yes / no
+yesNo('Do you want to continue?', { yesLabel: 'Yes', noLabel: 'No' });
+
+// Confirm or cancel (plan approval in PlanningAgent)
+confirmCancel('Ready to start coding the plan above?');
+
+// Confirm, cancel, or modify (execution draft in ExecutionAgent)
+confirmCancelModify('About to run: npm run build. Proceed?');
+
+// Arbitrary choice list (> 3 options)
+choiceList('Which environment?', ['staging', 'production', 'local']);
+
+// Retry or cancel after failure
+retryCancel('Tests failed. What would you like to do?');
+```
+
+---
+
+### ButtonResponseHandler — handler signatures
+
+`ButtonResponseHandler` is instantiated with a plain object whose keys are callback functions. Register it once in `CommunicationAgent` (or wherever button responses are handled) and call `handler.handleMessage(msg)` for every inbound message that may carry a button interaction.
+
+```js
+const { ButtonResponseHandler } = require('./messaging/ButtonResponseHandler');
+
+const handler = new ButtonResponseHandler({
+  /**
+   * Called when the user taps Confirm on a confirmCancel / confirmCancelModify prompt,
+   * or taps Yes on a yesNo prompt (when no dedicated onYes is registered).
+   * @param {string} userId
+   */
+  onConfirm: (userId) => { /* approve draft / start execution */ },
+
+  /**
+   * Called when the user taps Cancel on any prompt, or taps No on a yesNo prompt
+   * (when no dedicated onNo is registered), or taps Cancel on a retryCancel prompt.
+   * @param {string} userId
+   */
+  onCancel: (userId) => { /* abort task */ },
+
+  /**
+   * Called when the user taps Modify on a confirmCancelModify prompt.
+   * `hint` is the button label text — the actual modification text comes from
+   * the user's next free-text message.
+   * @param {string} userId
+   * @param {string} hint   — button title from the tapped button (may be empty)
+   */
+  onModify: (userId, hint) => { /* enter modification-awaiting state */ },
+
+  /**
+   * Called when the user taps Yes on a yesNo prompt.
+   * Falls back to onConfirm if not provided.
+   * @param {string} userId
+   */
+  onYes: (userId) => { /* affirmative answer */ },
+
+  /**
+   * Called when the user taps No on a yesNo prompt.
+   * Falls back to onCancel if not provided.
+   * @param {string} userId
+   */
+  onNo: (userId) => { /* negative answer */ },
+
+  /**
+   * Called when the user selects an item from a choiceList prompt.
+   * @param {string} userId
+   * @param {number} choiceIndex  — 0-based index matching the choices[] array position
+   * @param {string} choiceTitle  — display label of the selected row
+   */
+  onChoice: (userId, choiceIndex, choiceTitle) => { /* handle selection */ },
+
+  /**
+   * Called when the user taps Retry on a retryCancel prompt.
+   * @param {string} userId
+   */
+  onRetry: (userId) => { /* retry last operation */ },
+});
+
+// In MessagingLayer.onMessage(), intercept button responses before text routing:
+if (handler.handleMessage(msg)) return; // button was handled — skip text routing
+```
+
+`handleMessage(msg)` returns `true` if the message carried a recognised button ID and was routed to a handler, or `false` if it should be passed through to normal text routing.
+
+---
+
 ## Token Budget System
 
 Each task has a max invocation limit to control cost:
@@ -697,7 +834,12 @@ src/
 │
 ├── messaging/
 │   ├── MessagingLayer.js        ← Provider-agnostic interface for sending/receiving messages
-│   └── WhatsAppProvider.js      ← whatsapp-web.js adapter; swap this file to support Telegram or Slack
+│   ├── WhatsAppProvider.js      ← whatsapp-web.js adapter; swap this file to support Telegram or Slack
+│   └── ButtonResponseHandler.js ← Routes incoming button interactions to onConfirm/onCancel/onModify/onChoice/onRetry callbacks
+│
+├── ui/
+│   ├── WhatsAppButtons.js       ← Low-level payload builders: buildQuickReply, buildListMessage, buildTemplateMessage
+│   └── ConfirmationPrompts.js   ← Pre-built helpers (yesNo, confirmCancel, confirmCancelModify, choiceList, retryCancel)
 │
 └── utils/
     └── StatusFormatter.js       ← Formats status updates into readable WhatsApp messages (with emoji prefixes)

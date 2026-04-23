@@ -1,3 +1,5 @@
+const { confirmCancel } = require('../ui/ConfirmationPrompts');
+
 /**
  * PlanningAgent
  *
@@ -60,6 +62,27 @@ Example format:
       rawOutput: result.output,
       budget: result.budget,
     };
+  }
+
+  /**
+   * Build a confirmCancel button prompt summarising the generated plan.
+   * The caller (OrchestratorAgent) sends this to the user and awaits
+   * confirmation before proceeding to the coding stage.
+   *
+   * @param {Array<{id: number, description: string}>} steps - The generated plan steps.
+   * @returns {{ type: 'quick_reply', payload: object }}     - Button prompt payload.
+   */
+  buildPlanApprovalPrompt(steps) {
+    const stepLines = steps.map((s) => `${s.id}. ${s.description}`).join('\n');
+    // Truncate long plans so the WhatsApp body stays readable
+    const preview = stepLines.length <= 300 ? stepLines : `${stepLines.slice(0, 297)}...`;
+    return confirmCancel(
+      `📋 *Implementation Plan* (${steps.length} steps):\n\n${preview}`,
+      {
+        header: 'Ready to execute?',
+        footer: 'You can also type /confirm, /cancel, or /modify <changes>',
+      }
+    );
   }
 
   _parseSteps(output) {
