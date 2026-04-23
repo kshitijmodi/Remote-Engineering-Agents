@@ -1,3 +1,5 @@
+const { ButtonResponseHandler } = require('./ButtonResponseHandler');
+
 /**
  * MessagingLayer — abstract base class.
  *
@@ -6,6 +8,14 @@
  * talks to — swapping providers requires no changes elsewhere.
  */
 class MessagingLayer {
+  constructor() {
+    /** @type {ButtonResponseHandler|null} */
+    this._buttonResponseHandler = null;
+
+    /** @type {function(Message): void|null} */
+    this._messageCallback = null;
+  }
+
   /**
    * Connect to the messaging provider and start listening.
    * Should emit 'ready' when connected.
@@ -33,6 +43,21 @@ class MessagingLayer {
   }
 
   /**
+   * Register a ButtonResponseHandler to intercept button interactions before
+   * they reach the normal text message callback. When a message arrives with
+   * a buttonInteraction field and the handler recognises the button ID, the
+   * message is consumed and the text callback is NOT called.
+   *
+   * @param {ButtonResponseHandler} handler
+   */
+  registerButtonResponseHandler(handler) {
+    if (!(handler instanceof ButtonResponseHandler)) {
+      throw new TypeError('handler must be an instance of ButtonResponseHandler');
+    }
+    this._buttonResponseHandler = handler;
+  }
+
+  /**
    * Send a message to a user.
    * @param {string} userId - Provider-specific user ID
    * @param {string} text
@@ -43,11 +68,61 @@ class MessagingLayer {
   }
 
   /**
+   * Send a quick-reply button message.
+   * @param {string} userId
+   * @param {string} bodyText - The message body shown above the buttons
+   * @param {Array<{ id: string, title: string }>} buttons - Up to 3 buttons
+   * @returns {Promise<void>}
+   */
+  async sendQuickReply(userId, bodyText, buttons) {
+    throw new Error('sendQuickReply() not implemented');
+  }
+
+  /**
+   * Send a list/menu message with selectable rows.
+   * @param {string} userId
+   * @param {string} bodyText        - The message body
+   * @param {string} buttonLabel     - Label shown on the list-open button
+   * @param {Array<{ id: string, title: string, description?: string }>} rows
+   * @returns {Promise<void>}
+   */
+  async sendListMessage(userId, bodyText, buttonLabel, rows) {
+    throw new Error('sendListMessage() not implemented');
+  }
+
+  /**
    * Returns the current connection status.
    * @returns {{ connected: boolean, provider: string, detail?: string }}
    */
   getStatus() {
     throw new Error('getStatus() not implemented');
+  }
+
+  /**
+   * Dispatch a normalized message through the button-interaction pipeline
+   * before handing off to the registered text callback.
+   *
+   * Subclasses should call this instead of invoking the text callback directly
+   * so that button interactions are intercepted automatically.
+   *
+   * Flow:
+   *   1. If the message has a buttonInteraction and a ButtonResponseHandler is
+   *      registered, attempt to route via the handler.
+   *   2. If the handler consumed the interaction (returns true), stop — do not
+   *      call the text callback.
+   *   3. Otherwise fall through to the normal text callback.
+   *
+   * @param {Message} msg - Normalized message from buildMessage()
+   */
+  _dispatchMessage(msg) {
+    if (msg.buttonInteraction && this._buttonResponseHandler) {
+      const handled = this._buttonResponseHandler.handleMessage(msg);
+      if (handled) return;
+    }
+
+    if (typeof this._messageCallback === 'function') {
+      this._messageCallback(msg);
+    }
   }
 }
 
@@ -62,6 +137,18 @@ class MessagingLayer {
  * @property {string|null} confirmationAction  - 'confirm' | 'cancel' | null
  * @property {MediaAttachment[]} media - Array of media attachments (images, PDFs, etc.)
  * @property {LinkObject[]} links      - Array of extracted URLs from message text
+ * @property {ButtonInteraction|null} buttonInteraction - Set when the message is a button
+ *   response (quick reply or list selection); null for normal text messages.
+ */
+
+/**
+ * A button interaction parsed from an incoming WhatsApp interactive message.
+ *
+ * @typedef {Object} ButtonInteraction
+ * @property {'quick_reply'|'list'} type - The WhatsApp interactive message type
+ * @property {string|null} buttonId  - Button ID for quick_reply interactions
+ * @property {string|null} rowId     - Row ID for list interactions
+ * @property {string|null} title     - Human-readable label of the selected button/row
  */
 
 /**
@@ -120,11 +207,12 @@ function parseConfirmationCommand(text) {
  * @param {string}  opts.userId
  * @param {string}  opts.text
  * @param {Date}    [opts.receivedAt]
- * @param {MediaAttachment[]} [opts.media]
- * @param {LinkObject[]}      [opts.links]
+ * @param {MediaAttachment[]}  [opts.media]
+ * @param {LinkObject[]}       [opts.links]
+ * @param {ButtonInteraction}  [opts.buttonInteraction]
  * @returns {Message}
  */
-function buildMessage({ userId, text, receivedAt, media, links }) {
+function buildMessage({ userId, text, receivedAt, media, links, buttonInteraction }) {
   const { isConfirmation, confirmationAction } = parseConfirmationCommand(text);
   return {
     userId,
@@ -134,7 +222,8 @@ function buildMessage({ userId, text, receivedAt, media, links }) {
     confirmationAction,
     media: Array.isArray(media) ? media : [],
     links: Array.isArray(links) ? links : [],
+    buttonInteraction: buttonInteraction || null,
   };
 }
 
-module.exports = { MessagingLayer, parseConfirmationCommand, buildMessage };
+module.exports = { MessagingLayer, parseConfirmationCommand, buildMessage, ButtonResponseHandler };

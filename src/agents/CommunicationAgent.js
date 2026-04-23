@@ -5,6 +5,11 @@ const {
   formatCompletionRecap,
 } = require('../utils/StatusFormatter');
 const { MessageMedia } = require('whatsapp-web.js');
+const {
+  confirmCancelModify,
+  yesNo,
+  retryCancel,
+} = require('../ui/ConfirmationPrompts');
 
 /**
  * CommunicationAgent
@@ -140,15 +145,82 @@ class CommunicationAgent {
 
   /**
    * Send a plan confirmation prompt to the user.
-   * Formats the plan steps and asks the user to /confirm, /cancel, or /modify.
+   * Uses interactive buttons (Confirm / Cancel / Modify) when the provider supports
+   * them; falls back to the plain-text /confirm | /cancel | /modify prompt otherwise.
    * @param {string} userId
    * @param {Array<{id: number, description: string}>} steps
    */
   async sendPlanConfirmation(userId, steps) {
-    const msg = formatPlan(steps);
-    await this.send(userId, msg).catch((err) => {
+    const stepList = steps.map((s) => `${s.id}. ${s.description}`).join('\n');
+    const bodyText = `📋 *Implementation Plan* (${steps.length} steps):\n${stepList}`;
+
+    const prompt = confirmCancelModify(bodyText, {
+      header: 'Ready to execute?',
+      footer: 'You can also type /confirm, /cancel, or /modify <changes>',
+    });
+
+    await this._sendButtonPrompt(userId, prompt).catch((err) => {
       console.error('[CommunicationAgent] Failed to send plan confirmation:', err.message);
     });
+  }
+
+  /**
+   * Send a yes/no button prompt to the user.
+   * Falls back to plain text if the provider does not support buttons.
+   * @param {string} userId
+   * @param {string} question
+   * @param {object} [opts]   - Forwarded to ConfirmationPrompts.yesNo()
+   */
+  async sendYesNoPrompt(userId, question, opts = {}) {
+    const prompt = yesNo(question, opts);
+    await this._sendButtonPrompt(userId, prompt).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send yes/no prompt:', err.message);
+    });
+  }
+
+  /**
+   * Send a retry/cancel button prompt to the user after a failure.
+   * Falls back to plain text if the provider does not support buttons.
+   * @param {string} userId
+   * @param {string} bodyText - Description of what failed.
+   * @param {object} [opts]   - Forwarded to ConfirmationPrompts.retryCancel()
+   */
+  async sendRetryCancelPrompt(userId, bodyText, opts = {}) {
+    const prompt = retryCancel(bodyText, opts);
+    await this._sendButtonPrompt(userId, prompt).catch((err) => {
+      console.error('[CommunicationAgent] Failed to send retry/cancel prompt:', err.message);
+    });
+  }
+
+  /**
+   * Internal helper: dispatch a structured button prompt to the messaging layer.
+   * Tries provider-specific button methods; falls back to plain text if unavailable.
+   * @param {string} userId
+   * @param {{ type: 'quick_reply'|'list', payload: object }} prompt
+   */
+  async _sendButtonPrompt(userId, prompt) {
+    if (prompt.type === 'quick_reply' && typeof this._messaging.sendQuickReply === 'function') {
+      await this._messaging.sendQuickReply(userId, prompt.payload);
+      return;
+    }
+    if (prompt.type === 'list' && typeof this._messaging.sendListMessage === 'function') {
+      await this._messaging.sendListMessage(userId, prompt.payload);
+      return;
+    }
+    // Fallback: flatten the prompt to plain text
+    const { body, buttons, sections } = prompt.payload;
+    let text = body || '';
+    if (buttons && buttons.length) {
+      text += '\n\n' + buttons.map((b) => `• ${b.title}`).join('\n');
+    } else if (sections && sections.length) {
+      for (const section of sections) {
+        if (section.title) text += `\n\n*${section.title}*`;
+        for (const row of section.rows || []) {
+          text += `\n• ${row.title}`;
+        }
+      }
+    }
+    await this._messaging.sendMessage(userId, text.trim());
   }
 
   /**
