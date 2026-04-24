@@ -1,4 +1,4 @@
-const { confirmCancel } = require('../ui/ConfirmationPrompts');
+const { confirmCancelModify } = require('../ui/ConfirmationPrompts');
 
 /**
  * PlanningAgent
@@ -76,11 +76,11 @@ Example format:
     const stepLines = steps.map((s) => `${s.id}. ${s.description}`).join('\n');
     // Truncate long plans so the WhatsApp body stays readable
     const preview = stepLines.length <= 300 ? stepLines : `${stepLines.slice(0, 297)}...`;
-    return confirmCancel(
-      `📋 *Implementation Plan* (${steps.length} steps):\n\n${preview}`,
+    return confirmCancelModify(
+      `Ready to execute? Tap a button or type /confirm, /cancel, or /modify <changes>`,
       {
-        header: 'Ready to execute?',
-        footer: 'You can also type /confirm, /cancel, or /modify <changes>',
+        header: `📋 Plan (${steps.length} steps)`,
+        footer: 'Modify = re-generate the plan with your changes',
       }
     );
   }
