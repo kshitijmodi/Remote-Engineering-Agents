@@ -70,10 +70,11 @@ class OrchestratorAgent extends EventEmitter {
    * @param {function(string, string): Promise<void>} notify  - send WhatsApp message to user
    * @param {import('../utils/ExecutionStateManager')|null} [stateManager]  - optional shared ExecutionStateManager instance
    */
-  constructor(agents, notify, stateManager = null) {
+  constructor(agents, notify, stateManager = null, sendInteractive = null) {
     super();
     this._agents = agents;
     this._notify = notify;
+    this._sendInteractive = sendInteractive;
     // taskId → task object
     this._tasks = new Map();
     // userId → { taskId, resolve, sentAt }  — tracks in-flight plan confirmations
@@ -336,10 +337,20 @@ class OrchestratorAgent extends EventEmitter {
 
       const planningDuration = getStageDuration(task.stageTiming, STATES.PLANNING);
       const planningTimeStr = planningDuration != null ? ` in ${formatElapsed(planningDuration)}` : '';
+      // Always send the plan as plain text so steps are always visible
       await this._notify(
         task.userId,
         `✅ *Planning complete*${planningTimeStr}\n\n${formatPlan(result.steps)}`
       );
+      // Then send interactive buttons if available, otherwise fall back to slash hint
+      if (this._sendInteractive) {
+        await this._sendInteractive(
+          task.userId,
+          this._agents.planning.buildPlanApprovalPrompt(result.steps)
+        );
+      } else {
+        await this._notify(task.userId, `Reply /confirm, /cancel, or /modify <changes>`);
+      }
 
       // Await user /confirm, /cancel, or /modify
       const confirmResult = await this._awaitConfirmation(task);
