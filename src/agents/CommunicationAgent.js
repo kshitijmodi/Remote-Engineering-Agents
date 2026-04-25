@@ -38,8 +38,9 @@ class CommunicationAgent {
    * @param {function(string): void}         handlers.onLogs       - (userId)
    * @param {function(string): void}         handlers.onConfirm    - (userId)
    * @param {function(string, string): void} handlers.onModify     - (userId, modificationText)
+   * @param {function(string, string, object): void} [handlers.onFileSend] - (userId, messageText, multimodal)
    * @param {function(string, string): Promise<string>} [classify] - Optional async intent classifier
-   *        Signature: (userId, text) => Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'>
+   *        Signature: (userId, text) => Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'|'FILE_SEND'>
    */
   constructor(messagingLayer, allowedNumbers, handlers, classify = null) {
     this._messaging = messagingLayer;
@@ -155,6 +156,44 @@ class CommunicationAgent {
         // Continue sending remaining items even if one fails
       }
     }
+  }
+
+  /**
+   * Send a file as an attachment to the user via the messaging provider.
+   *
+   * Coordinates with the messaging layer's sendFileAttachment (path-based API).
+   * Falls back to sendDocument (base64 API) if sendFileAttachment is unavailable.
+   *
+   * @param {string} userId   - WhatsApp user ID
+   * @param {string} filePath - Absolute path to the file on disk
+   * @param {string} [caption] - Optional caption sent alongside the file
+   */
+  async sendFileAttachment(userId, filePath, caption = '') {
+    if (typeof this._messaging.sendFileAttachment === 'function') {
+      await this._messaging.sendFileAttachment(userId, filePath);
+      return;
+    }
+
+    // Fallback: use sendDocument if available (requires MIME type detection)
+    if (typeof this._messaging.sendDocument === 'function') {
+      const path = require('path');
+      const ext = path.extname(filePath).toLowerCase();
+      const MIME_MAP = {
+        '.pdf':  'application/pdf',
+        '.txt':  'text/plain',
+        '.csv':  'text/csv',
+        '.json': 'application/json',
+        '.png':  'image/png',
+        '.jpg':  'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.zip':  'application/zip',
+      };
+      const mimeType = MIME_MAP[ext] || 'application/octet-stream';
+      await this._messaging.sendDocument(userId, filePath, mimeType, caption);
+      return;
+    }
+
+    throw new Error('File attachment sending is not supported by the current messaging provider');
   }
 
   /**
@@ -346,10 +385,11 @@ class CommunicationAgent {
 
     const dispatch = (() => {
       switch (intent) {
-        case 'STATUS':   return this._handlers.onStatus?.(userId);
-        case 'QUESTION': return this._handlers.onQuery?.(userId, effectiveText, multimodal);
-        case 'PUSH':     return this._handlers.onPush?.(userId, null);
-        default:         return this._handlers.onTask?.(userId, effectiveText, multimodal);
+        case 'STATUS':    return this._handlers.onStatus?.(userId);
+        case 'QUESTION':  return this._handlers.onQuery?.(userId, effectiveText, multimodal);
+        case 'PUSH':      return this._handlers.onPush?.(userId, null);
+        case 'FILE_SEND': return this._handlers.onFileSend?.(userId, effectiveText, multimodal);
+        default:          return this._handlers.onTask?.(userId, effectiveText, multimodal);
       }
     })();
     Promise.resolve(dispatch).catch((err) => {

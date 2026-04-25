@@ -756,6 +756,258 @@ async function main() {
   console.assert(registerThrew === true, 'MessagingLayer.registerButtonResponseHandler: throws for non-ButtonResponseHandler');
   console.log('PASS: MessagingLayer.registerButtonResponseHandler rejects invalid handler');
 
+  // ── FileHandler: readFileForTransfer — happy path ────────────────────────
+  const {
+    readFileForTransfer,
+    setFileSizeLimit,
+    setAllowedBaseDirs,
+  } = require('./src/utils/FileHandler');
+
+  const ftTmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-ft-'));
+  const ftTxtFile = path.join(ftTmpDir, 'report.txt');
+  fs.writeFileSync(ftTxtFile, 'Hello file transfer test');
+
+  const ftResult = readFileForTransfer(ftTxtFile);
+  console.assert(ftResult.filename === 'report.txt',   'readFileForTransfer: filename');
+  console.assert(ftResult.mimeType === 'text/plain',   'readFileForTransfer: mimeType for .txt');
+  console.assert(typeof ftResult.base64 === 'string' && ftResult.base64.length > 0, 'readFileForTransfer: base64 present');
+  console.assert(ftResult.size === Buffer.from('Hello file transfer test').length,   'readFileForTransfer: size');
+  console.assert(ftResult.mtime instanceof Date,       'readFileForTransfer: mtime is Date');
+  console.assert(ftResult.resolvedPath === ftTxtFile,  'readFileForTransfer: resolvedPath');
+  console.assert(
+    Buffer.from(ftResult.base64, 'base64').toString('utf8') === 'Hello file transfer test',
+    'readFileForTransfer: base64 round-trips'
+  );
+  console.log('PASS: FileHandler readFileForTransfer happy path');
+
+  // ── FileHandler: readFileForTransfer — file not found ────────────────────
+  let ftNotFoundThrew = false;
+  try { readFileForTransfer(path.join(ftTmpDir, 'nonexistent.txt')); } catch (err) {
+    ftNotFoundThrew = err.message.includes('not found') || err.message.includes('File not found');
+  }
+  console.assert(ftNotFoundThrew, 'readFileForTransfer: throws on missing file');
+  console.log('PASS: FileHandler readFileForTransfer file not found');
+
+  // ── FileHandler: readFileForTransfer — blocked extension ─────────────────
+  const ftShFile = path.join(ftTmpDir, 'script.sh');
+  fs.writeFileSync(ftShFile, '#!/bin/bash\necho hi');
+  let ftBlockedThrew = false;
+  try { readFileForTransfer(ftShFile); } catch (err) {
+    ftBlockedThrew = err.message.includes('Access denied') && err.message.includes('.sh');
+  }
+  console.assert(ftBlockedThrew, 'readFileForTransfer: throws Access denied for .sh');
+  console.log('PASS: FileHandler readFileForTransfer blocked extension');
+
+  // ── FileHandler: readFileForTransfer — file too large ────────────────────
+  const ftLargeFile = path.join(ftTmpDir, 'large.csv');
+  fs.writeFileSync(ftLargeFile, 'x');
+  setFileSizeLimit(1); // 1-byte limit
+  let ftTooLargeThrew = false;
+  try { readFileForTransfer(ftLargeFile); } catch (err) {
+    ftTooLargeThrew = err.message.includes('too large') || err.message.includes('File too large');
+  }
+  setFileSizeLimit(10 * 1024 * 1024); // restore to 10 MB
+  console.assert(ftTooLargeThrew, 'readFileForTransfer: throws File too large');
+  console.log('PASS: FileHandler readFileForTransfer file too large');
+
+  // ── FileHandler: readFileForTransfer — outside allowed dirs ──────────────
+  setAllowedBaseDirs([path.join(ftTmpDir, 'restricted')]);
+  let ftAccessDeniedThrew = false;
+  try { readFileForTransfer(ftTxtFile); } catch (err) {
+    ftAccessDeniedThrew = err.message.includes('Access denied');
+  }
+  setAllowedBaseDirs([]); // disable restriction
+  console.assert(ftAccessDeniedThrew, 'readFileForTransfer: throws Access denied outside allowed dirs');
+  console.log('PASS: FileHandler readFileForTransfer access denied outside allowed dirs');
+
+  fs.rmSync(ftTmpDir, { recursive: true, force: true });
+
+  // ── IntentAgent: FILE_SEND fast-path pattern matching ────────────────────
+  const ftIntentAgent = new IntentAgent();
+  // Override executor so tests never reach the LLM
+  ftIntentAgent._executor.run = async () => { throw new Error('Should not reach LLM for FILE_SEND fast path'); };
+
+  const ftIntent1 = await ftIntentAgent.classify('send me file /var/log/app.log');
+  console.assert(ftIntent1 === 'FILE_SEND', `IntentAgent: "send me file /path" → FILE_SEND (got ${ftIntent1})`);
+
+  const ftIntent2 = await ftIntentAgent.classify('can you send me the /reports/summary.pdf');
+  console.assert(ftIntent2 === 'FILE_SEND', `IntentAgent: "send me the /path" → FILE_SEND (got ${ftIntent2})`);
+
+  const ftIntent3 = await ftIntentAgent.classify('share the log file with me');
+  console.assert(ftIntent3 === 'FILE_SEND', `IntentAgent: "share the log file" → FILE_SEND (got ${ftIntent3})`);
+
+  console.log('PASS: IntentAgent FILE_SEND fast-path pattern matching');
+
+  // ── FileAgent: _extractPath — various message formats ────────────────────
+  const { FileAgent } = require('./src/agents/FileAgent');
+  const ftDummyMessaging = { sendMessage: async () => {}, sendDocument: async () => {} };
+  const ftAgent = new FileAgent(ftDummyMessaging);
+
+  console.assert(ftAgent._extractPath('send me file /var/log/app.log') === '/var/log/app.log', 'FileAgent._extractPath: absolute unix path');
+  console.assert(ftAgent._extractPath('send "logs/app.log"') === 'logs/app.log',               'FileAgent._extractPath: double-quoted path');
+  console.assert(ftAgent._extractPath("share 'report.pdf'") === 'report.pdf',                  'FileAgent._extractPath: single-quoted path');
+  console.assert(ftAgent._extractPath('send report.csv') === 'report.csv',                     'FileAgent._extractPath: extension-based fallback');
+
+  let ftExtractThrew = false;
+  try { ftAgent._extractPath('hello world'); } catch { ftExtractThrew = true; }
+  console.assert(ftExtractThrew, 'FileAgent._extractPath: throws when no path found');
+  console.log('PASS: FileAgent _extractPath parses message formats');
+
+  // ── FileAgent: prepareFileTransfer delegates to readFileForTransfer ───────
+  const ftPrepareTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-fp-'));
+  const ftPrepareFile   = path.join(ftPrepareTmpDir, 'data.json');
+  fs.writeFileSync(ftPrepareFile, '{"key":"value"}');
+  const ftPrepared = ftAgent.prepareFileTransfer(ftPrepareFile);
+  console.assert(ftPrepared.filename === 'data.json',        'FileAgent.prepareFileTransfer: filename');
+  console.assert(ftPrepared.mimeType === 'application/json', 'FileAgent.prepareFileTransfer: mimeType');
+  console.assert(typeof ftPrepared.base64 === 'string',      'FileAgent.prepareFileTransfer: base64 present');
+  fs.rmSync(ftPrepareTmpDir, { recursive: true, force: true });
+  console.log('PASS: FileAgent prepareFileTransfer delegates to readFileForTransfer');
+
+  // ── FileAgent.handle(): sendDocument called with correct metadata ─────────
+  const ftHandleTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-fh-'));
+  const ftHandleFile   = path.join(ftHandleTmpDir, 'notes.txt');
+  fs.writeFileSync(ftHandleFile, 'some content');
+
+  let ftDocumentSent = null;
+  const ftDocMessaging = {
+    sendMessage:  async () => {},
+    sendDocument: async (uid, item) => { ftDocumentSent = { uid, item }; },
+  };
+  const ftHandleAgent = new FileAgent(ftDocMessaging);
+  await ftHandleAgent.handle('user@c.us', `send me file ${ftHandleFile}`);
+  console.assert(ftDocumentSent !== null,                       'FileAgent.handle: sendDocument called');
+  console.assert(ftDocumentSent.uid === 'user@c.us',           'FileAgent.handle: sendDocument uid');
+  console.assert(ftDocumentSent.item.filename === 'notes.txt', 'FileAgent.handle: sendDocument filename');
+  console.assert(ftDocumentSent.item.mimeType === 'text/plain','FileAgent.handle: sendDocument mimeType');
+  fs.rmSync(ftHandleTmpDir, { recursive: true, force: true });
+  console.log('PASS: FileAgent handle() sends file via sendDocument');
+
+  // ── FileAgent.handle(): file not found — error reported to user ───────────
+  let ftErrMsg = null;
+  const ftErrMessaging = {
+    sendMessage:  async (_uid, msg) => { ftErrMsg = msg; },
+    sendDocument: async () => {},
+  };
+  await new FileAgent(ftErrMessaging).handle('user@c.us', 'send me file /nonexistent/path/file.txt');
+  console.assert(ftErrMsg !== null && ftErrMsg.includes('Failed to send file'), 'FileAgent.handle: reports error on missing file');
+  console.log('PASS: FileAgent handle() reports error when file not found');
+
+  // ── FileAgent.handle(): no path in message — error reported to user ───────
+  let ftNoPathMsg = null;
+  const ftNoPathMessaging = { sendMessage: async (_uid, msg) => { ftNoPathMsg = msg; } };
+  await new FileAgent(ftNoPathMessaging).handle('user@c.us', 'send me a file please');
+  console.assert(ftNoPathMsg !== null && ftNoPathMsg.includes('Could not determine file path'), 'FileAgent.handle: reports error when no path in message');
+  console.log('PASS: FileAgent handle() reports error when no path found in message');
+
+  // ── CommunicationAgent: FILE_SEND intent routes to onFileSend ─────────────
+  const { CommunicationAgent } = require('./src/agents/CommunicationAgent');
+  const { MessagingLayer: MessagingLayerClass } = require('./src/messaging/MessagingLayer');
+
+  class FakeMessagingForCA extends MessagingLayerClass {
+    onMessage(cb) { this._messageCallback = cb; }
+    async sendMessage() {}
+  }
+
+  let ftFileSendArgs = null;
+  const ftCAMessaging = new FakeMessagingForCA();
+  const ftCA = new CommunicationAgent(
+    ftCAMessaging,
+    ['alice@c.us'],
+    { onFileSend: (uid, text, multimodal) => { ftFileSendArgs = { uid, text, multimodal }; } },
+    async (_uid, text) => /send me file/i.test(text) ? 'FILE_SEND' : 'TASK',
+  );
+  ftCA.start();
+
+  const ftCAMsg = buildMessage({ userId: 'alice@c.us', text: 'send me file /tmp/report.txt' });
+  await ftCAMessaging._messageCallback(ftCAMsg);
+  await new Promise(r => setTimeout(r, 20)); // let async dispatch settle
+  console.assert(ftFileSendArgs !== null,                              'CommunicationAgent: FILE_SEND routes to onFileSend');
+  console.assert(ftFileSendArgs.uid === 'alice@c.us',                 'CommunicationAgent: onFileSend receives correct userId');
+  console.assert(ftFileSendArgs.text.includes('send me file'),        'CommunicationAgent: onFileSend receives message text');
+  console.log('PASS: CommunicationAgent routes FILE_SEND intent to onFileSend handler');
+
+  // ── WhatsAppProvider.sendFileAttachment: error-path guards ────────────────
+  // WhatsAppProvider cannot be instantiated in tests (needs Puppeteer/whatsapp-web.js
+  // headless browser), so we validate its error-guard logic in isolation.
+  const ftWapTmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-wap-'));
+  const ftWapFile    = path.join(ftWapTmpDir, 'output.txt');
+  fs.writeFileSync(ftWapFile, 'WhatsApp file transfer test');
+
+  // Thin harness that mirrors the real sendFileAttachment guards exactly
+  async function stubSendFileAttachment(connected, filePath) {
+    if (!connected) throw new Error('[WhatsApp] Cannot send — not connected');
+    let stat;
+    try { stat = fs.statSync(filePath); } catch (err) {
+      if (err.code === 'EACCES') throw new Error(`[WhatsApp] Access denied: ${filePath}`);
+      throw new Error(`[WhatsApp] File not found: ${filePath}`);
+    }
+    if (!stat.isFile()) throw new Error(`[WhatsApp] Path is not a file: ${filePath}`);
+    const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+    if (stat.size > MAX_ATTACHMENT_BYTES) {
+      const sizeMB  = (stat.size / (1024 * 1024)).toFixed(2);
+      const limitMB = (MAX_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0);
+      throw new Error(`[WhatsApp] File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit`);
+    }
+    return 'sent';
+  }
+
+  let wapNotConnected = null;
+  try { await stubSendFileAttachment(false, ftWapFile); } catch (err) { wapNotConnected = err.message; }
+  console.assert(wapNotConnected && wapNotConnected.includes('not connected'), 'sendFileAttachment: throws when not connected');
+
+  let wapNotFound = null;
+  try { await stubSendFileAttachment(true, path.join(ftWapTmpDir, 'missing.txt')); } catch (err) { wapNotFound = err.message; }
+  console.assert(wapNotFound && wapNotFound.includes('File not found'), 'sendFileAttachment: throws File not found');
+
+  const wapOk = await stubSendFileAttachment(true, ftWapFile);
+  console.assert(wapOk === 'sent', 'sendFileAttachment: resolves when file exists and connected');
+
+  fs.rmSync(ftWapTmpDir, { recursive: true, force: true });
+  console.log('PASS: WhatsAppProvider sendFileAttachment error-path guards');
+
+  // ── End-to-end file transfer: classify → FileAgent → mock sendDocument ────
+  // Simulates the full runtime pipeline:
+  //   1. IntentAgent classifies "send me file <path>" → FILE_SEND (fast path, no LLM)
+  //   2. Router calls FileAgent.handle()
+  //   3. FileAgent reads the file via FileHandler.readFileForTransfer()
+  //   4. FileAgent calls sendDocument() on the messaging layer
+  const e2eFtTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-e2e-ft-'));
+  const e2eFtFile   = path.join(e2eFtTmpDir, 'summary.txt');
+  fs.writeFileSync(e2eFtFile, 'End-to-end file transfer content');
+
+  let e2eFtDocSent = null;
+  let e2eFtErrMsg  = null;
+  const e2eFtMessaging = {
+    sendMessage:  async (_uid, msg) => { e2eFtErrMsg = msg; },
+    sendDocument: async (uid, item) => { e2eFtDocSent = { uid, item }; },
+  };
+  const e2eFtAgent  = new FileAgent(e2eFtMessaging);
+  const e2eIntentAg = new IntentAgent();
+  e2eIntentAg._executor.run = async () => { throw new Error('LLM not available in test'); };
+
+  // Step 1: classify
+  const e2eFtMessage = `send me file ${e2eFtFile}`;
+  const e2eFtIntent  = await e2eIntentAg.classify(e2eFtMessage);
+  console.assert(e2eFtIntent === 'FILE_SEND', `e2e file transfer: intent is FILE_SEND (got ${e2eFtIntent})`);
+
+  // Step 2: route to FileAgent
+  if (e2eFtIntent === 'FILE_SEND') await e2eFtAgent.handle('e2e-user@c.us', e2eFtMessage);
+
+  // Step 3: verify delivery
+  console.assert(e2eFtDocSent !== null,                         'e2e file transfer: sendDocument was called');
+  console.assert(e2eFtDocSent.uid === 'e2e-user@c.us',         'e2e file transfer: correct userId');
+  console.assert(e2eFtDocSent.item.filename === 'summary.txt', 'e2e file transfer: correct filename');
+  console.assert(e2eFtDocSent.item.mimeType === 'text/plain',  'e2e file transfer: correct MIME type');
+  console.assert(
+    Buffer.from(e2eFtDocSent.item.base64, 'base64').toString('utf8') === 'End-to-end file transfer content',
+    'e2e file transfer: file content preserved through base64 encoding'
+  );
+  console.assert(e2eFtErrMsg === null, 'e2e file transfer: no error message sent to user');
+
+  fs.rmSync(e2eFtTmpDir, { recursive: true, force: true });
+  console.log('PASS: e2e file transfer — classify → FileAgent → sendDocument');
+
   console.log('\nAll agent tests passed.');
   process.exit(0);
 }

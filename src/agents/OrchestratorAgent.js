@@ -201,21 +201,27 @@ class OrchestratorAgent extends EventEmitter {
 
   /**
    * Handle a FILE_SEND intent — delegates to FileAgent if one is registered.
-   * Should be called by the caller (e.g. CommunicationAgent handler) when the
-   * intent classifier returns 'FILE_SEND'.
+   * This is the `onFileSend` handler entry point; wire it in index.js as:
+   *   handlers.onFileSend = (userId, msg) => orchestrator.handleFileSend(userId, msg)
    *
-   * @param {string} userId  - WhatsApp user ID
-   * @param {string} message - Raw message text (e.g. "send me file /var/log/app.log")
+   * @param {string} userId        - WhatsApp user ID
+   * @param {string} message       - Raw message text (e.g. "send me file /var/log/app.log")
+   * @param {object} [multimodal]  - Optional multimodal context (reserved for future use)
    * @returns {Promise<void>}
    */
-  async handleFileSend(userId, message) {
+  async handleFileSend(userId, message, multimodal = null) {
     const { file: fileAgent, logging } = this._agents;
     if (!fileAgent) {
       await this._notify(userId, 'File sending is not configured on this instance.');
       return;
     }
     logging?.log?.('file', 'INFO', `FILE_SEND intent from ${userId}: "${message}"`);
-    await fileAgent.handle(userId, message);
+    try {
+      await fileAgent.handle(userId, message);
+    } catch (err) {
+      logging?.log?.('file', 'ERROR', `FILE_SEND routing error for ${userId}: ${err.message}`);
+      await this._notify(userId, `Failed to process file transfer: ${err.message}`);
+    }
   }
 
   // ─── State machine ─────────────────────────────────────────────────────────

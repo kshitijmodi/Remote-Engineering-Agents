@@ -1,24 +1,4 @@
-const path = require('path');
-const { readFileAsBase64 } = require('../utils/FileHandler');
-
-// Map common extensions to MIME types for WhatsApp delivery
-const MIME_MAP = {
-  '.pdf':  'application/pdf',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif':  'image/gif',
-  '.webp': 'image/webp',
-  '.txt':  'text/plain',
-  '.log':  'text/plain',
-  '.csv':  'text/csv',
-  '.json': 'application/json',
-  '.xml':  'application/xml',
-  '.zip':  'application/zip',
-  '.mp4':  'video/mp4',
-};
-
-const DEFAULT_MIME = 'application/octet-stream';
+const { readFileForTransfer } = require('../utils/FileHandler');
 
 /**
  * FileAgent
@@ -61,17 +41,15 @@ class FileAgent {
 
     let fileData;
     try {
-      fileData = readFileAsBase64(filePath);
+      fileData = this.prepareFileTransfer(filePath);
     } catch (err) {
       console.error(`[FileAgent] Failed to read file "${filePath}":`, err.message);
       await this._messaging.sendMessage(userId, `Failed to send file: ${err.message}`);
       return;
     }
 
-    const { base64, filename, size } = fileData;
-    const ext      = path.extname(filename).toLowerCase();
-    const mimeType = MIME_MAP[ext] || DEFAULT_MIME;
-    const sizeKB   = (size / 1024).toFixed(1);
+    const { base64, filename, mimeType, size } = fileData;
+    const sizeKB = (size / 1024).toFixed(1);
 
     const mediaItem = {
       mimeType,
@@ -97,6 +75,30 @@ class FileAgent {
       console.error(`[FileAgent] Failed to send file "${filename}" to ${userId}:`, err.message);
       await this._messaging.sendMessage(userId, `Error delivering file: ${err.message}`);
     }
+  }
+
+  // ─── Public helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Read a file and return its metadata, suitable for passing to
+   * WhatsAppProvider.sendFileAttachment() or inspecting before delivery.
+   *
+   * Delegates all security validation (path traversal, blocked extensions,
+   * size limits, existence) to FileHandler.readFileForTransfer().
+   *
+   * @param {string} filePath - path supplied by the caller (may be relative)
+   * @returns {{
+   *   base64: string,
+   *   resolvedPath: string,
+   *   filename: string,
+   *   mimeType: string,
+   *   size: number,
+   *   mtime: Date
+   * }}
+   * @throws {Error} if the file fails any security check or cannot be read
+   */
+  prepareFileTransfer(filePath) {
+    return readFileForTransfer(filePath);
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────

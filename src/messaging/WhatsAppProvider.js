@@ -222,6 +222,71 @@ class WhatsAppProvider extends MessagingLayer {
     await this._client.sendMessage(userId, media, { caption, sendMediaAsDocument: true });
   }
 
+  /**
+   * Send a file attachment via WhatsApp, auto-detecting MIME type from the extension.
+   *
+   * @param {string} to       - WhatsApp chat ID (e.g. "447911123456@c.us")
+   * @param {string} filePath - Absolute path to the file on disk
+   */
+  async sendFileAttachment(to, filePath) {
+    if (!this._connected) {
+      throw new Error('[WhatsApp] Cannot send — not connected');
+    }
+    // Validate file existence, type, and size before reading
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (err) {
+      if (err.code === 'EACCES') {
+        throw new Error(`[WhatsApp] Access denied: ${filePath}`);
+      }
+      throw new Error(`[WhatsApp] File not found: ${filePath}`);
+    }
+
+    if (!stat.isFile()) {
+      throw new Error(`[WhatsApp] Path is not a file: ${filePath}`);
+    }
+
+    // WhatsApp document uploads are capped at 64 MB
+    const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+    if (stat.size > MAX_ATTACHMENT_BYTES) {
+      const sizeMB  = (stat.size / (1024 * 1024)).toFixed(2);
+      const limitMB = (MAX_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0);
+      throw new Error(`[WhatsApp] File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit`);
+    }
+
+    const filename = path.basename(filePath);
+    const ext = path.extname(filename).toLowerCase();
+    const MIME_MAP = {
+      '.pdf':  'application/pdf',
+      '.doc':  'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls':  'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.txt':  'text/plain',
+      '.csv':  'text/csv',
+      '.png':  'image/png',
+      '.jpg':  'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif':  'image/gif',
+      '.zip':  'application/zip',
+      '.json': 'application/json',
+    };
+    const mimeType = MIME_MAP[ext] || 'application/octet-stream';
+    let fileData;
+    try {
+      fileData = fs.readFileSync(filePath);
+    } catch (err) {
+      if (err.code === 'EACCES') {
+        throw new Error(`[WhatsApp] Access denied: cannot read file ${filePath}`);
+      }
+      throw err;
+    }
+    const base64Data = fileData.toString('base64');
+    const media = new MessageMedia(mimeType, base64Data, filename);
+    await this._client.sendMessage(to, media, { sendMediaAsDocument: true });
+  }
+
   getStatus() {
     return {
       connected: this._connected,
