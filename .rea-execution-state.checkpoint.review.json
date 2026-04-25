@@ -2,8 +2,8 @@
   "agentName": "review",
   "output": {
     "verdict": "PASS",
-    "reasons": "Could not parse verdict — defaulting to PASS.",
+    "reasons": "**PASS**\n\n**Reasons:**\n\n1. **Directory skipping optimization** (`SKIP_DIRS` in `collectFiles`) — correctly implemented. The constant is properly scoped, the directory check happens before traversal, and it prevents unnecessary file collection in known large directories (node_modules, .git, etc.).\n\n2. **File hint extraction fixes** (in `extractFileHint`) — The changes directly address the identified bug:\n   - Strips prepositions (\"for\", \"from\", \"in\", \"of\", etc.) that were polluting the token list\n   - Strips directory-related words (\"project\", \"folder\", \"repo\", etc.) that were causing \"project\" to be picked over \"PRD\"\n   - Adds acronym preference logic (`/^[A-Z0-9]{2,}$/`) to correctly identify all-caps file hints before falling back to longest token\n   - The order of regex replacements is sensible and the token filtering (`split().filter()`) handles any extra whitespace\n\n3. **Logic correctness** — Tracing through \"Send me the PRD file for this project\":\n   - After all replacements: only \"PRD\" remains as a token\n   - Acronym check catches \"PRD\" (matches `/^[A-Z0-9]{2,}$/`)\n   - Returns \"PRD\" instead of \"project\" ✓\n\n4. **Code style** — Consistent with existing patterns; comments are clear; variable naming is appropriate.\n\nNo obvious bugs, edge cases, or security issues detected.",
     "passed": true
   },
-  "timestamp": 1777095759529
+  "timestamp": 1777121867317
 }

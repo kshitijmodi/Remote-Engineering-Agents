@@ -67,7 +67,12 @@ function collectFiles(dir, maxDepth = 4, _seen = new Set()) {
     return results;
   }
 
+  const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'build', '.cache']);
+
   for (const entry of entries) {
+    // Skip known large/irrelevant directories
+    if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
+
     const full = path.join(dir, entry.name);
 
     // Resolve symlinks so we can detect cycles
@@ -337,6 +342,8 @@ function extractFileHint(message) {
     .replace(/\b(me|us|him|her|them)\b/gi, '')
     .replace(/\b(please|can you|could you|would you|will you)\b/gi, '')
     .replace(/\b(the|a|an|that|this|those|these|my|our|your)\b/gi, '')
+    .replace(/\b(for|from|in|of|to|at|by|on|with|about|into|onto)\b/gi, '')
+    .replace(/\b(project|folder|directory|repo|repository|workspace|codebase)\b/gi, '')
     .replace(/\b(file|document|doc|attachment|report|sheet|image|picture|photo)\b/gi, (match) => {
       // Keep type words that are also aliases
       return TYPE_ALIASES[match.toLowerCase()] ? match : '';
@@ -354,6 +361,10 @@ function extractFileHint(message) {
   // Prefer a token that maps to a known type alias
   const typeToken = tokens.find((t) => TYPE_ALIASES[t.toLowerCase()]);
   if (typeToken) return typeToken.toLowerCase();
+
+  // Prefer tokens that look like acronyms (all-uppercase, 2+ chars) or contain digits
+  const acronym = tokens.find((t) => /^[A-Z0-9]{2,}$/.test(t));
+  if (acronym) return acronym;
 
   // Otherwise return the longest non-trivial token
   return tokens.reduce((a, b) => (a.length >= b.length ? a : b), '');
