@@ -100,6 +100,35 @@ class FileAgent {
   // ─── Public helpers ────────────────────────────────────────────────────────
 
   /**
+   * Locate the file referenced by a natural-language message.
+   *
+   * Tries an explicit path extraction first; falls back to fuzzy matching
+   * against recent files and/or the provided search directories.
+   *
+   * @param {string} userId   - WhatsApp user ID (used for clarification messages)
+   * @param {string} message  - Raw message text, e.g. "send me the PRD file"
+   * @param {object} [context]
+   * @param {string[]} [context.recentFiles]  - recently accessed file paths
+   * @param {string[]} [context.searchDirs]   - directories to scan for fuzzy matches
+   * @returns {Promise<string|null>} resolved absolute file path, or null if unresolved
+   */
+  async searchAndMatchFile(userId, message, context = {}) {
+    let filePath;
+
+    try {
+      filePath = this._extractPath(message);
+    } catch (_) {
+      // No explicit path — fall through to fuzzy resolution
+    }
+
+    if (!filePath) {
+      filePath = await this._resolveVagueReference(userId, message, context);
+    }
+
+    return filePath || null;
+  }
+
+  /**
    * Read a file and return its metadata, suitable for passing to
    * WhatsAppProvider.sendFileAttachment() or inspecting before delivery.
    *

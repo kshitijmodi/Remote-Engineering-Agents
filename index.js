@@ -13,6 +13,7 @@ const { MetricsAgent } = require('./src/agents/MetricsAgent');
 const { OrchestratorAgent } = require('./src/agents/OrchestratorAgent');
 const { ContextAgent } = require('./src/agents/ContextAgent');
 const { IntentAgent } = require('./src/agents/IntentAgent');
+const { FileAgent } = require('./src/agents/FileAgent');
 const { formatStepInProgress } = require('./src/utils/StatusFormatter');
 const { processLinksFromText } = require('./src/utils/LinkProcessor');
 const ExecutionStateManager = require('./src/utils/ExecutionStateManager');
@@ -44,6 +45,7 @@ async function main() {
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
   });
+  const fileAgent = new FileAgent(messaging);
   const repoAgent = new RepoAgent();
   const logging   = new LoggingAgent();
   const metrics   = new MetricsAgent();
@@ -412,6 +414,48 @@ async function main() {
       await reliableSend(userId, '🛑 Stopping bot. Use pm2 start rea to bring it back up.');
       await messaging.disconnect().catch(() => {});
       setTimeout(() => process.exit(0), 1000);
+    },
+
+    onFileSend: async (userId, messageText, multimodal) => {
+      let repoPath;
+      try {
+        repoPath = repoAgent.getActiveRepoPath(userId);
+      } catch {
+        repoPath = null;
+      }
+      const searchDirs = [repoPath || process.cwd()];
+
+      let filePath;
+      try {
+        filePath = await fileAgent.searchAndMatchFile(userId, messageText, { searchDirs });
+      } catch (err) {
+        console.error(`[FileAgent] Error searching for file:`, err.message);
+        await reliableSend(userId, `Error searching for file: ${err.message}`);
+        return;
+      }
+      if (!filePath) return; // searchAndMatchFile already notified the user
+
+      // Step 3: Read the matched file
+      let fileData;
+      try {
+        fileData = fileAgent.prepareFileTransfer(filePath);
+      } catch (err) {
+        console.error(`[FileAgent] Failed to read file "${filePath}":`, err.message);
+        await reliableSend(userId, `Failed to read file: ${err.message}`);
+        return;
+      }
+
+      // Step 4: Send the file via WhatsAppProvider.sendDocument()
+      const { resolvedPath, filename, mimeType, size } = fileData;
+      const sizeKB = (size / 1024).toFixed(1);
+      const caption = `${filename} (${sizeKB} KB)`;
+      try {
+        await messaging.sendDocument(userId, resolvedPath, mimeType, caption);
+        console.log(`[FileAgent] Sent file "${filename}" (${sizeKB} KB) to ${userId}`);
+      } catch (err) {
+        console.error(`[FileAgent] Failed to send file "${filename}" to ${userId}:`, err.message);
+        await reliableSend(userId, `Error delivering file: ${err.message}`);
+      }
     },
   }, classifyIntent);
 
