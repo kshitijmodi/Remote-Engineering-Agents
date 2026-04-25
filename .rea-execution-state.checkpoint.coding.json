@@ -1,37 +1,41 @@
 {
   "agentName": "coding",
   "output": {
-    "taskText": "Let's implement this then",
+    "taskText": "1",
     "planSteps": [
       {
         "id": 1,
-        "description": "Create src/utils/FileHandler.js to safely read files, validate paths, and prevent directory traversal attacks"
+        "description": "Add `sendFileAttachment(to, filePath)` method to src/messaging/WhatsAppProvider.js to send files via WhatsApp API"
       },
       {
         "id": 2,
-        "description": "Add sendDocument() method to src/messaging/WhatsAppProvider.js to send file attachments via WhatsApp API"
+        "description": "Add `readFileForTransfer(filePath)` method to src/utils/FileHandler.js with security validation and error handling"
       },
       {
         "id": 3,
-        "description": "Update src/agents/IntentAgent.js to detect file-send commands (e.g., \"send me file /path/to/file\")"
+        "description": "Update src/agents/IntentAgent.js to recognize file transfer commands (pattern: \"send me file <path>\")"
       },
       {
         "id": 4,
-        "description": "Create src/agents/FileAgent.js to handle file reading and coordinate file sending via WhatsApp"
+        "description": "Update src/agents/FileAgent.js to handle file transfer requests by reading file and returning metadata"
       },
       {
         "id": 5,
-        "description": "Modify src/agents/OrchestratorAgent.js to route file-send intents to FileAgent"
+        "description": "Update src/agents/OrchestratorAgent.js to route file-transfer intents to FileAgent"
       },
       {
         "id": 6,
-        "description": "Update src/messaging/MessagingLayer.js to support file attachment payloads in responses"
+        "description": "Update src/agents/CommunicationAgent.js to coordinate with FileAgent and call WhatsAppProvider.sendFileAttachment()"
       },
       {
         "id": 7,
-        "description": "Add file size limits and access control validation in FileHandler.js for security"
+        "description": "Add comprehensive error handling for file not found, access denied, and size limits across FileHandler and WhatsAppProvider"
+      },
+      {
+        "id": 8,
+        "description": "Create test case in test-agents.js to verify end-to-end file transfer"
       }
     ]
   },
-  "timestamp": 1777084573793
+  "timestamp": 1777085622638
 }

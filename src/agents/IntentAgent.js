@@ -34,7 +34,8 @@ class IntentAgent {
    */
   async classify(message, { contextBlock = '', activeStatus = null, hasActiveRepo = false, multimodal = null } = {}) {
     // Fast path: detect file-send commands without burning an LLM call
-    if (/\b(send|share|attach|give me|get me)\b.{0,60}\b(file|document|attachment|pdf|image|log)\b/i.test(message) ||
+    if (/\bsend\s+me\s+file\s+\S+/i.test(message) ||
+        /\b(send|share|attach|give me|get me)\b.{0,60}\b(file|document|attachment|pdf|image|log)\b/i.test(message) ||
         /\bsend\s+(me\s+)?(the\s+)?\/\S+/i.test(message)) {
       return 'FILE_SEND';
     }

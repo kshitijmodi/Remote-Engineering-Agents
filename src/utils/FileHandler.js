@@ -112,7 +112,10 @@ function statFile(resolvedPath) {
   try {
     // lstat so we can detect symlinks before following them
     stat = fs.lstatSync(resolvedPath);
-  } catch {
+  } catch (err) {
+    if (err.code === 'EACCES') {
+      throw new Error(`Access denied: cannot access ${resolvedPath}`);
+    }
     throw new Error(`File not found: ${resolvedPath}`);
   }
 
@@ -144,7 +147,15 @@ function readFile(filePath) {
   const resolvedPath = validatePath(filePath);
   const { size }     = statFile(resolvedPath);
 
-  const buffer   = fs.readFileSync(resolvedPath);
+  let buffer;
+  try {
+    buffer = fs.readFileSync(resolvedPath);
+  } catch (err) {
+    if (err.code === 'EACCES') {
+      throw new Error(`Access denied: cannot read file ${resolvedPath}`);
+    }
+    throw err;
+  }
   const filename = path.basename(resolvedPath);
 
   return { buffer, resolvedPath, filename, size };
@@ -168,6 +179,86 @@ function readTextFile(filePath) {
 function readFileAsBase64(filePath) {
   const { buffer, resolvedPath, filename, size } = readFile(filePath);
   return { base64: buffer.toString('base64'), resolvedPath, filename, size };
+}
+
+/**
+ * Read a file for transfer via WhatsApp, returning metadata and base64 content.
+ * Performs full security validation: path traversal, extension block, size limit,
+ * and existence checks. Returns a structured result suitable for passing directly
+ * to WhatsAppProvider.sendFileAttachment().
+ *
+ * Errors thrown:
+ *   - 'Invalid file path: ...'        — bad input or null byte
+ *   - 'Access denied: ...'            — blocked extension or outside allowed dirs
+ *   - 'File not found: ...'           — path does not exist
+ *   - 'Path is not a file: ...'       — path resolves to a directory or special file
+ *   - 'File too large: ...'           — file exceeds the configured size limit
+ *
+ * @param {string} filePath - path supplied by the caller (may be relative)
+ * @returns {{
+ *   base64: string,
+ *   resolvedPath: string,
+ *   filename: string,
+ *   mimeType: string,
+ *   size: number,
+ *   mtime: Date
+ * }}
+ */
+function readFileForTransfer(filePath) {
+  const resolvedPath          = validatePath(filePath);
+  const { size, mtime }       = statFile(resolvedPath);
+  let buffer;
+  try {
+    buffer = fs.readFileSync(resolvedPath);
+  } catch (err) {
+    if (err.code === 'EACCES') {
+      throw new Error(`Access denied: cannot read file ${resolvedPath}`);
+    }
+    throw err;
+  }
+  const filename              = path.basename(resolvedPath);
+  const ext                   = path.extname(filename).toLowerCase();
+
+  // Best-effort MIME type mapping — covers the most common transfer formats.
+  const MIME_MAP = {
+    '.pdf':  'application/pdf',
+    '.doc':  'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls':  'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.ppt':  'application/vnd.ms-powerpoint',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.zip':  'application/zip',
+    '.tar':  'application/x-tar',
+    '.gz':   'application/gzip',
+    '.txt':  'text/plain',
+    '.csv':  'text/csv',
+    '.json': 'application/json',
+    '.xml':  'application/xml',
+    '.html': 'text/html',
+    '.htm':  'text/html',
+    '.png':  'image/png',
+    '.jpg':  'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif':  'image/gif',
+    '.webp': 'image/webp',
+    '.svg':  'image/svg+xml',
+    '.mp3':  'audio/mpeg',
+    '.wav':  'audio/wav',
+    '.ogg':  'audio/ogg',
+    '.mp4':  'video/mp4',
+    '.webm': 'video/webm',
+  };
+  const mimeType = MIME_MAP[ext] || 'application/octet-stream';
+
+  return {
+    base64: buffer.toString('base64'),
+    resolvedPath,
+    filename,
+    mimeType,
+    size,
+    mtime,
+  };
 }
 
 /**
@@ -198,4 +289,5 @@ module.exports = Object.assign(exports, {
   readFile,
   readTextFile,
   readFileAsBase64,
+  readFileForTransfer,
 });
