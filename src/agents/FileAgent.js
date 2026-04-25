@@ -114,6 +114,18 @@ class FileAgent {
     }
   }
 
+  /**
+   * Returns true when a disambiguation reply is pending for the given user.
+   * Useful for intent routing — callers can detect this and ensure the reply
+   * is directed to the file-send handler rather than another handler.
+   *
+   * @param {string} userId
+   * @returns {boolean}
+   */
+  hasPendingDisambiguation(userId) {
+    return this._pendingDisambiguation.has(userId);
+  }
+
   // ─── Public helpers ────────────────────────────────────────────────────────
 
   /**
@@ -289,15 +301,57 @@ class FileAgent {
     }
 
     // ── Ambiguous: ask for clarification ─────────────────────────────────────
-    const options = matches
-      .slice(0, 5)
+    const candidates = matches.slice(0, 5);
+    const options = candidates
       .map((m, i) => `  ${i + 1}. ${m.filename}`)
       .join('\n');
+
+    this._pendingDisambiguation.set(userId, { matches: candidates, hint });
 
     await this._messaging.sendMessage(
       userId,
       `I found multiple files matching *"${hint}"*. Which one did you mean?\n${options}\n\nReply with the number or the exact filename.`
     );
+    return null;
+  }
+
+  /**
+   * Try to resolve a disambiguation reply (number or filename) against pending matches.
+   * Clears the pending state on success.
+   *
+   * @param {string} userId
+   * @param {string} message
+   * @returns {string|null} resolved absolute file path, or null if no match
+   */
+  _resolveDisambiguationReply(userId, message) {
+    const pending = this._pendingDisambiguation.get(userId);
+    if (!pending) return null;
+
+    const { matches } = pending;
+    const trimmed = message.trim();
+
+    // Match by 1-based index
+    const idx = parseInt(trimmed, 10);
+    if (!isNaN(idx) && idx >= 1 && idx <= matches.length) {
+      this._pendingDisambiguation.delete(userId);
+      return matches[idx - 1].filePath;
+    }
+
+    // Match by exact filename (case-insensitive)
+    const lower = trimmed.toLowerCase();
+    const byName = matches.find(m => m.filename.toLowerCase() === lower);
+    if (byName) {
+      this._pendingDisambiguation.delete(userId);
+      return byName.filePath;
+    }
+
+    // Match when the message contains the filename (e.g. "send me headshots.jpg")
+    const byContains = matches.find(m => lower.includes(m.filename.toLowerCase()));
+    if (byContains) {
+      this._pendingDisambiguation.delete(userId);
+      return byContains.filePath;
+    }
+
     return null;
   }
 }

@@ -1,7 +1,7 @@
 {
   "agentName": "testing",
   "output": {
-    "lastTestOutput": "You've hit your limit · resets 1:30pm (America/New_York)"
+    "lastTestOutput": "STATUS: PASS\nPASSED: 0\nFAILED: 0\nDETAILS: No tests configured"
   },
-  "timestamp": 1777137355223
+  "timestamp": 1777139750579
 }

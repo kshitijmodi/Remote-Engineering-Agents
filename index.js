@@ -136,6 +136,11 @@ async function main() {
 
   // LLM-based intent classifier — replaces regex heuristics in CommunicationAgent
   async function classifyIntent(userId, text) {
+    // If the user is in the middle of a file disambiguation, any reply should
+    // go to the file-send handler so the pending selection can be resolved.
+    if (fileAgent.hasPendingDisambiguation(userId)) {
+      return 'FILE_SEND';
+    }
     let contextBlock = '';
     let activeStatus = null;
     let hasActiveRepo = false;
