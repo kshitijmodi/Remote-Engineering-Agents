@@ -91,6 +91,16 @@ class MessagingLayer {
   }
 
   /**
+   * Send a file document to a user.
+   * @param {string} userId - Provider-specific user ID
+   * @param {FileAttachment} attachment - File attachment payload
+   * @returns {Promise<void>}
+   */
+  async sendDocument(userId, attachment) {
+    throw new Error('sendDocument() not implemented');
+  }
+
+  /**
    * Returns the current connection status.
    * @returns {{ connected: boolean, provider: string, detail?: string }}
    */
@@ -169,6 +179,17 @@ class MessagingLayer {
  * @property {string} url        - The raw URL string
  * @property {string|null} title - Page title from link preview, if available
  * @property {string|null} description - Short description from link preview, if available
+ */
+
+/**
+ * An outgoing file attachment payload for sendDocument().
+ *
+ * @typedef {Object} FileAttachment
+ * @property {string} filePath   - Absolute path to the file on disk
+ * @property {string} filename   - Filename to display to the recipient
+ * @property {string} mimeType   - MIME type (e.g. 'application/pdf', 'text/plain')
+ * @property {number} size       - File size in bytes
+ * @property {string|null} caption - Optional caption to accompany the document
  */
 
 /**

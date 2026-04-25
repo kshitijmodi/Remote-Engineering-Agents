@@ -67,6 +67,7 @@ class OrchestratorAgent extends EventEmitter {
    * @param {import('./ReviewAgent').ReviewAgent}       agents.review
    * @param {import('./LoggingAgent').LoggingAgent}     agents.logging
    * @param {import('../claude/ClaudeCodeExecutor').ClaudeCodeExecutor} agents.executor
+   * @param {import('./FileAgent').FileAgent}           [agents.file]  - optional; handles FILE_SEND intents
    * @param {function(string, string): Promise<void>} notify  - send WhatsApp message to user
    * @param {import('../utils/ExecutionStateManager')|null} [stateManager]  - optional shared ExecutionStateManager instance
    */
@@ -196,6 +197,25 @@ class OrchestratorAgent extends EventEmitter {
    */
   getActiveTask(userId) {
     return this._getActiveTask(userId);
+  }
+
+  /**
+   * Handle a FILE_SEND intent — delegates to FileAgent if one is registered.
+   * Should be called by the caller (e.g. CommunicationAgent handler) when the
+   * intent classifier returns 'FILE_SEND'.
+   *
+   * @param {string} userId  - WhatsApp user ID
+   * @param {string} message - Raw message text (e.g. "send me file /var/log/app.log")
+   * @returns {Promise<void>}
+   */
+  async handleFileSend(userId, message) {
+    const { file: fileAgent, logging } = this._agents;
+    if (!fileAgent) {
+      await this._notify(userId, 'File sending is not configured on this instance.');
+      return;
+    }
+    logging?.log?.('file', 'INFO', `FILE_SEND intent from ${userId}: "${message}"`);
+    await fileAgent.handle(userId, message);
   }
 
   // ─── State machine ─────────────────────────────────────────────────────────
