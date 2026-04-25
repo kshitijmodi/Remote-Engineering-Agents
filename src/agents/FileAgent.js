@@ -23,6 +23,8 @@ class FileAgent {
    */
   constructor(messagingLayer) {
     this._messaging = messagingLayer;
+    // Keyed by userId — stores { matches, hint } when disambiguation is pending
+    this._pendingDisambiguation = new Map();
   }
 
   /**
@@ -43,11 +45,26 @@ class FileAgent {
   async handle(userId, message, context = {}) {
     let filePath;
 
+    // ── 0. If a disambiguation is pending for this user, try to resolve it ───
+    if (this._pendingDisambiguation.has(userId)) {
+      const resolved = this._resolveDisambiguationReply(userId, message);
+      if (resolved) {
+        console.log(`[FileAgent] Disambiguation resolved for ${userId}: "${resolved}"`);
+        filePath = resolved;
+      } else {
+        // Reply didn't match any option — fall through to a fresh search
+        console.log(`[FileAgent] Disambiguation reply "${message}" did not match pending options for ${userId} — retrying fresh search`);
+        this._pendingDisambiguation.delete(userId);
+      }
+    }
+
     // ── 1. Try to extract an explicit path from the message ──────────────────
-    try {
-      filePath = this._extractPath(message);
-    } catch (_) {
-      // No explicit path — fall through to fuzzy resolution
+    if (!filePath) {
+      try {
+        filePath = this._extractPath(message);
+      } catch (_) {
+        // No explicit path — fall through to fuzzy resolution
+      }
     }
 
     // ── 2. Fuzzy resolution when no explicit path was found ──────────────────
@@ -114,6 +131,17 @@ class FileAgent {
    */
   async searchAndMatchFile(userId, message, context = {}) {
     let filePath;
+
+    // Check for pending disambiguation first so the full original path is used
+    if (this._pendingDisambiguation.has(userId)) {
+      const resolved = this._resolveDisambiguationReply(userId, message);
+      if (resolved) {
+        console.log(`[FileAgent] searchAndMatchFile: disambiguation resolved for ${userId}: "${resolved}"`);
+        return resolved;
+      }
+      console.log(`[FileAgent] searchAndMatchFile: disambiguation reply "${message}" did not match for ${userId} — retrying fresh search`);
+      this._pendingDisambiguation.delete(userId);
+    }
 
     try {
       filePath = this._extractPath(message);

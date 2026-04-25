@@ -325,28 +325,25 @@ class CommunicationAgent {
    * @param {{ type: 'quick_reply'|'list', payload: object }} prompt
    */
   async _sendButtonPrompt(userId, prompt) {
-    if (prompt.type === 'quick_reply' && typeof this._messaging.sendQuickReply === 'function') {
-      await this._messaging.sendQuickReply(userId, prompt.payload);
-      return;
-    }
-    if (prompt.type === 'list' && typeof this._messaging.sendListMessage === 'function') {
-      await this._messaging.sendListMessage(userId, prompt.payload);
-      return;
-    }
-    // Fallback: flatten the prompt to plain text
-    const { body, buttons, sections } = prompt.payload;
-    let text = body || '';
-    if (buttons && buttons.length) {
-      text += '\n\n' + buttons.map((b) => `• ${b.title}`).join('\n');
-    } else if (sections && sections.length) {
+    // WhatsApp Web Buttons/List are deprecated — always use plain text fallback
+    const p = prompt.payload ?? prompt;
+    const body = p.body?.text ?? p.body ?? '';
+    const header = p.header?.text ? `*${p.header.text}*\n` : '';
+    const footer = p.footer?.text ? `\n_${p.footer.text}_` : '';
+    let options = '';
+    const buttons = p.action?.buttons;
+    const sections = p.action?.sections;
+    if (Array.isArray(buttons) && buttons.length) {
+      options = '\n\n' + buttons.map((b) => `• ${b.reply?.title ?? b.title ?? b.body}`).join('\n');
+    } else if (Array.isArray(sections) && sections.length) {
       for (const section of sections) {
-        if (section.title) text += `\n\n*${section.title}*`;
+        if (section.title) options += `\n\n*${section.title}*`;
         for (const row of section.rows || []) {
-          text += `\n• ${row.title}`;
+          options += `\n• ${row.title}`;
         }
       }
     }
-    await this._messaging.sendMessage(userId, text.trim());
+    await this._messaging.sendMessage(userId, `${header}${body}${options}${footer}`.trim());
   }
 
   /**
