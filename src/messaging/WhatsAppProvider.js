@@ -1,4 +1,4 @@
-const { Client, LocalAuth, Buttons, List } = require('whatsapp-web.js');
+const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
 const { buildQuickReply, buildListMessage } = require('../ui/WhatsAppButtons');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
@@ -201,6 +201,25 @@ class WhatsAppProvider extends MessagingLayer {
       footer,
     );
     await this._client.sendMessage(userId, msg);
+  }
+
+  /**
+   * Send a file as a document attachment.
+   *
+   * @param {string} userId   - WhatsApp chat ID (e.g. "447911123456@c.us")
+   * @param {string} filePath - Absolute path to the file on disk
+   * @param {string} mimeType - MIME type of the file (e.g. "application/pdf")
+   * @param {string} caption  - Optional caption sent alongside the document
+   */
+  async sendDocument(userId, filePath, mimeType, caption = '') {
+    if (!this._connected) {
+      throw new Error('[WhatsApp] Cannot send — not connected');
+    }
+    const fileData = fs.readFileSync(filePath);
+    const base64Data = fileData.toString('base64');
+    const filename = path.basename(filePath);
+    const media = new MessageMedia(mimeType, base64Data, filename);
+    await this._client.sendMessage(userId, media, { caption, sendMediaAsDocument: true });
   }
 
   getStatus() {

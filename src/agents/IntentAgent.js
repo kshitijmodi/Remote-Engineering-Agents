@@ -30,9 +30,14 @@ class IntentAgent {
    * @param {object}  [opts.multimodal]    - Multimodal context from the message
    * @param {Array}   [opts.multimodal.media] - Attached media (images, PDFs, etc.)
    * @param {Array}   [opts.multimodal.links] - Processed links from the message
-   * @returns {Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'>}
+   * @returns {Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'|'FILE_SEND'>}
    */
   async classify(message, { contextBlock = '', activeStatus = null, hasActiveRepo = false, multimodal = null } = {}) {
+    // Fast path: detect file-send commands without burning an LLM call
+    if (/\b(send|share|attach|give me|get me)\b.{0,60}\b(file|document|attachment|pdf|image|log)\b/i.test(message) ||
+        /\bsend\s+(me\s+)?(the\s+)?\/\S+/i.test(message)) {
+      return 'FILE_SEND';
+    }
     const situationLines = [
       hasActiveRepo ? 'User has an active repo workspace.' : 'No repo workspace is currently connected.',
       activeStatus ? `There is a task currently running at stage: ${activeStatus}.` : 'No task is currently running.',
@@ -61,10 +66,11 @@ ${situationLines}
 User's message: "${message}"${attachmentLines.length > 0 ? `\n${attachmentLines.join('\n')}` : ''}
 
 Classify the intent. Reply with exactly ONE word — no punctuation, no explanation:
-  TASK     — user wants code written, modified, fixed, created, or refactored in the repo
-  QUESTION — user wants information, explanation, clarification, or a discussion (not code execution)
-  STATUS   — user is checking on the progress of the current running task
-  PUSH     — user wants to commit and push the current changes to GitHub
+  TASK      — user wants code written, modified, fixed, created, or refactored in the repo
+  QUESTION  — user wants information, explanation, clarification, or a discussion (not code execution)
+  STATUS    — user is checking on the progress of the current running task
+  PUSH      — user wants to commit and push the current changes to GitHub
+  FILE_SEND — user wants to receive a file, document, attachment, or log from the filesystem
 
 Your reply (one word only):`;
 
@@ -73,8 +79,8 @@ Your reply (one word only):`;
         model: 'claude-haiku-4-5-20251001',
       });
 
-      const word = result.output.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z]/g, '');
-      if (['TASK', 'QUESTION', 'STATUS', 'PUSH'].includes(word)) return word;
+      const word = result.output.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z_]/g, '');
+      if (['TASK', 'QUESTION', 'STATUS', 'PUSH', 'FILE_SEND'].includes(word)) return word;
     } catch {
       // Fall through to default
     }
