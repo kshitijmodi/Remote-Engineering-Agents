@@ -13,6 +13,14 @@ const { yesNo, confirmCancelModify, confirmCancel, choiceList, retryCancel } = r
 const { ButtonResponseHandler } = require('./src/messaging/ButtonResponseHandler');
 const { ContextAgent } = require('./src/agents/ContextAgent');
 const { IntentAgent }       = require('./src/agents/IntentAgent');
+const {
+  fuzzyScore,
+  searchByPartialName,
+  searchByType,
+  findMatches,
+  findInRecentFiles,
+  extractFileHint,
+} = require('./src/utils/FileMatching');
 const os   = require('os');
 const path = require('path');
 const fs   = require('fs');
@@ -1000,13 +1008,200 @@ async function main() {
   console.assert(e2eFtDocSent.item.filename === 'summary.txt', 'e2e file transfer: correct filename');
   console.assert(e2eFtDocSent.item.mimeType === 'text/plain',  'e2e file transfer: correct MIME type');
   console.assert(
-    Buffer.from(e2eFtDocSent.item.base64, 'base64').toString('utf8') === 'End-to-end file transfer content',
+    Buffer.from(e2eFtDocSent.item.data, 'base64').toString('utf8') === 'End-to-end file transfer content',
     'e2e file transfer: file content preserved through base64 encoding'
   );
   console.assert(e2eFtErrMsg === null, 'e2e file transfer: no error message sent to user');
 
   fs.rmSync(e2eFtTmpDir, { recursive: true, force: true });
   console.log('PASS: e2e file transfer — classify → FileAgent → sendDocument');
+
+  // ── FileMatching: extractFileHint ─────────────────────────────────────────
+  // Type-alias words are preserved; filler words are stripped
+  console.assert(extractFileHint('can you share the pdf please') === 'pdf',     'extractFileHint: "pdf" type word');
+  console.assert(extractFileHint('forward me the spreadsheet') === 'spreadsheet', 'extractFileHint: "spreadsheet" type word');
+  console.assert(extractFileHint('give me the image') === 'image',              'extractFileHint: "image" type word');
+  // Filenames with extensions survive stripping (non-type-alias words are stripped but extension token remains)
+  const fhBudget = extractFileHint('forward budget.xlsx');
+  console.assert(fhBudget && fhBudget.includes('budget'),                       'extractFileHint: filename token with extension extracted');
+  // Fully vague phrases with no useful token → null
+  console.assert(extractFileHint('send me that') === null,                      'extractFileHint: fully stripped phrase → null');
+  console.assert(extractFileHint('') === null,                                  'extractFileHint: empty string → null');
+  console.assert(extractFileHint(null) === null,                                'extractFileHint: null input → null');
+  console.log('PASS: FileMatching extractFileHint');
+
+  // ── FileMatching: fuzzyScore ──────────────────────────────────────────────
+  console.assert(fuzzyScore('report.txt', 'report.txt') === 1.0,               'fuzzyScore: exact match → 1.0');
+  console.assert(fuzzyScore('report', 'report.txt') === 1.0,                   'fuzzyScore: name-without-ext exact → 1.0');
+  console.assert(fuzzyScore('rep', 'report.txt') === 0.9,                      'fuzzyScore: prefix → 0.9');
+  console.assert(fuzzyScore('report', 'monthly-report.txt') >= 0.5,            'fuzzyScore: substring → ≥0.5');
+  console.assert(fuzzyScore('rpt', 'report.txt') === 0.3,                      'fuzzyScore: subsequence → 0.3');
+  console.assert(fuzzyScore('xyz', 'report.txt') === 0.0,                      'fuzzyScore: no match → 0.0');
+  console.assert(fuzzyScore('REPORT', 'report.txt') === 1.0,                   'fuzzyScore: case-insensitive exact');
+  console.log('PASS: FileMatching fuzzyScore');
+
+  // ── FileMatching: searchByPartialName ─────────────────────────────────────
+  const fmCandidates = [
+    '/docs/monthly-report.pdf',
+    '/docs/annual-report.docx',
+    '/docs/budget.xlsx',
+    '/docs/photo.jpg',
+    '/docs/readme.txt',
+  ];
+  const nameResults = searchByPartialName('report', fmCandidates);
+  console.assert(nameResults.length === 2,                                      'searchByPartialName: 2 "report" files found');
+  console.assert(nameResults.every(r => r.filename.toLowerCase().includes('report')), 'searchByPartialName: results all contain "report"');
+  console.assert(nameResults[0].score >= nameResults[1].score,                 'searchByPartialName: sorted by score descending');
+
+  const noResults = searchByPartialName('zzznomatch', fmCandidates);
+  console.assert(noResults.length === 0,                                        'searchByPartialName: no results for garbage query');
+
+  const limitResults = searchByPartialName('report', fmCandidates, { limit: 1 });
+  console.assert(limitResults.length === 1,                                     'searchByPartialName: limit option respected');
+  console.log('PASS: FileMatching searchByPartialName');
+
+  // ── FileMatching: searchByType ─────────────────────────────────────────────
+  const typeResults = searchByType('pdf', fmCandidates);
+  console.assert(typeResults.length === 1,                                      'searchByType: 1 pdf found');
+  console.assert(typeResults[0].filename === 'monthly-report.pdf',              'searchByType: correct pdf filename');
+
+  const docResults = searchByType('document', fmCandidates);
+  console.assert(docResults.length >= 1,                                        'searchByType: "document" alias matches .docx');
+
+  const imageResults = searchByType('image', fmCandidates);
+  console.assert(imageResults.length === 1,                                     'searchByType: 1 image found');
+  console.assert(imageResults[0].filename === 'photo.jpg',                     'searchByType: correct image filename');
+
+  const noTypeResults = searchByType('unknowntype', fmCandidates);
+  console.assert(noTypeResults.length === 0,                                    'searchByType: 0 results for unknown type');
+  console.log('PASS: FileMatching searchByType');
+
+  // ── FileMatching: findMatches (combined) ──────────────────────────────────
+  const combined = findMatches('budget', fmCandidates);
+  console.assert(combined.length >= 1,                                          'findMatches: finds "budget.xlsx" by name');
+  console.assert(combined[0].matchType === 'name',                              'findMatches: matchType is "name" for name match');
+
+  const typeOnly = findMatches('pdf', fmCandidates);
+  console.assert(typeOnly.length >= 1,                                          'findMatches: falls back to type match for "pdf"');
+  console.assert(['name', 'type'].includes(typeOnly[0].matchType),              'findMatches: matchType is "name" or "type"');
+  console.log('PASS: FileMatching findMatches');
+
+  // ── FileMatching: findInRecentFiles ───────────────────────────────────────
+  const recentList = [
+    '/home/user/projects/summary.txt',
+    '/home/user/documents/invoice.pdf',
+    '/home/user/pictures/photo.jpg',
+  ];
+  const recentName = findInRecentFiles('summary', recentList);
+  console.assert(recentName.length >= 1,                                        'findInRecentFiles: finds "summary.txt"');
+  console.assert(recentName[0].filename === 'summary.txt',                     'findInRecentFiles: correct filename');
+
+  // Recency boost: most-recent file with equal name score should rank first
+  const recentBoostList = [
+    '/home/user/b/report-new.txt',  // index 0 → most recent
+    '/home/user/a/report-old.txt',  // index 1 → older
+  ];
+  const boosted = findInRecentFiles('report', recentBoostList);
+  console.assert(boosted.length === 2,                                          'findInRecentFiles: both report files returned');
+  console.assert(boosted[0].filePath === '/home/user/b/report-new.txt',        'findInRecentFiles: most-recent file ranks first');
+
+  const recentEmpty = findInRecentFiles('summary', []);
+  console.assert(recentEmpty.length === 0,                                      'findInRecentFiles: empty list → 0 results');
+  console.log('PASS: FileMatching findInRecentFiles');
+
+  // ── IntentAgent: _isFileSendIntent via classify (fast path) ───────────────
+  const intentAg = new IntentAgent();
+  // Override executor so it never fires
+  intentAg._executor.run = async () => { throw new Error('LLM not available in test'); };
+
+  const vagueMessages = [
+    'send me that document',
+    'share the pdf',
+    'forward me the report',
+    'give me this file',
+    'can you send that?',
+    'attach the spreadsheet please',
+    'show me the log',
+    'gimme that zip',
+  ];
+  for (const msg of vagueMessages) {
+    const intent = await intentAg.classify(msg);
+    console.assert(intent === 'FILE_SEND', `IntentAgent fast-path: "${msg}" → FILE_SEND (got ${intent})`);
+  }
+  console.log('PASS: IntentAgent vague FILE_SEND fast-path patterns');
+
+  // extractFileHint delegation from IntentAgent
+  console.assert(intentAg.extractFileHint('send me the pdf') === 'pdf',        'IntentAgent.extractFileHint delegates correctly');
+  console.log('PASS: IntentAgent.extractFileHint delegation');
+
+  // ── FileAgent: _resolveVagueReference — no hint → clarification message ───
+  const faNohintMessages = [];
+  const faNohintMessaging = {
+    sendMessage:  async (_uid, msg) => { faNohintMessages.push(msg); },
+    sendDocument: async () => {},
+  };
+  const faNoHint = new FileAgent(faNohintMessaging);
+  // "send me that" strips to nothing → hint === null → generic clarification
+  await faNoHint.handle('tester@c.us', 'send me that', {});
+  console.assert(
+    faNohintMessages.some(m => /couldn't figure out|specify/i.test(m)),
+    'FileAgent: no-hint vague message triggers clarification'
+  );
+  console.log('PASS: FileAgent vague reference with no hint triggers clarification');
+
+  // ── FileAgent: _resolveVagueReference — hint + recentFiles → correct file ─
+  // Use "send me quarterly" so the hint is "quarterly" (not stripped), which
+  // prefix-matches "quarterly-summary.txt" at score 0.9.
+  const faFuzzyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-fm-fuzzy-'));
+  const faFuzzyFile   = path.join(faFuzzyTmpDir, 'quarterly-summary.txt');
+  fs.writeFileSync(faFuzzyFile, 'Quarterly summary contents');
+
+  let faFuzzyDocSent  = null;
+  let faFuzzyErrMsg   = null;
+  const faFuzzyMessaging = {
+    sendMessage:  async (_uid, msg) => { faFuzzyErrMsg = msg; },
+    sendDocument: async (_uid, item) => { faFuzzyDocSent = item; },
+  };
+  const faFuzzy = new FileAgent(faFuzzyMessaging);
+
+  await faFuzzy.handle('tester@c.us', 'send me quarterly', {
+    recentFiles: [faFuzzyFile],
+  });
+  console.assert(faFuzzyDocSent !== null,                                       'FileAgent fuzzy: sendDocument called via recentFiles');
+  console.assert(faFuzzyDocSent.filename === 'quarterly-summary.txt',          'FileAgent fuzzy: correct file resolved from partial name hint');
+  console.assert(faFuzzyErrMsg === null,                                        'FileAgent fuzzy: no error message sent');
+
+  fs.rmSync(faFuzzyTmpDir, { recursive: true, force: true });
+  console.log('PASS: FileAgent resolves vague reference via recentFiles fuzzy match');
+
+  // ── FileAgent: _resolveVagueReference — multiple matches → clarification ──
+  // "send me budget" → hint="budget" → matches both budget-jan.txt and budget-feb.txt.
+  // A non-matching file is placed at index 0 so neither budget file receives the
+  // full recency bonus (+0.1), keeping their scores equal and triggering clarification.
+  const faMultiTmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'rea-fm-multi-'));
+  const faMultiOther   = path.join(faMultiTmpDir, 'notes.txt');
+  const faMultiFile1   = path.join(faMultiTmpDir, 'budget-jan.txt');
+  const faMultiFile2   = path.join(faMultiTmpDir, 'budget-feb.txt');
+  fs.writeFileSync(faMultiOther, 'Notes');
+  fs.writeFileSync(faMultiFile1, 'January budget');
+  fs.writeFileSync(faMultiFile2, 'February budget');
+
+  const faMultiMessages = [];
+  const faMultiMessaging = {
+    sendMessage:  async (_uid, msg) => { faMultiMessages.push(msg); },
+    sendDocument: async () => {},
+  };
+  const faMulti = new FileAgent(faMultiMessaging);
+  await faMulti.handle('tester@c.us', 'send me budget', {
+    recentFiles: [faMultiOther, faMultiFile1, faMultiFile2],
+  });
+  console.assert(
+    faMultiMessages.some(m => /budget-jan|budget-feb|which|multiple|found/i.test(m)),
+    'FileAgent fuzzy: multiple matches triggers clarification listing files'
+  );
+
+  fs.rmSync(faMultiTmpDir, { recursive: true, force: true });
+  console.log('PASS: FileAgent multiple fuzzy matches triggers clarification prompt');
 
   console.log('\nAll agent tests passed.');
   process.exit(0);

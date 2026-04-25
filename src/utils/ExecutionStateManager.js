@@ -119,6 +119,58 @@ class ExecutionStateManager {
   }
 
   // ---------------------------------------------------------------------------
+  // File context tracking (recently mentioned / accessed files)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record a file that was mentioned or accessed in the current conversation.
+   * Persisted to disk so all pipeline agents share the same context.
+   * Duplicate entries for the same resolved path are collapsed (timestamp bumped).
+   * The list is capped at 50 entries to prevent unbounded growth.
+   *
+   * @param {{ filePath?: string|null, fileName?: string, mentionedAs?: string, action?: string }} fileEntry
+   *   filePath    — resolved absolute path (may be null if not yet resolved)
+   *   fileName    — bare filename; derived from filePath when omitted
+   *   mentionedAs — how the user referred to it ("this file", "the document", …)
+   *   action      — what happened ("mentioned" | "sent" | "accessed" | …)
+   */
+  addRecentFile(fileEntry) {
+    const context = this._loadFileContext();
+    const entry = {
+      filePath:    fileEntry.filePath    || null,
+      fileName:    fileEntry.fileName    || (fileEntry.filePath ? path.basename(fileEntry.filePath) : null),
+      mentionedAs: fileEntry.mentionedAs || null,
+      action:      fileEntry.action      || 'mentioned',
+      timestamp:   Date.now(),
+    };
+    // Collapse duplicate resolved paths — move to front with updated timestamp
+    if (entry.filePath) {
+      const idx = context.recentFiles.findIndex(f => f.filePath === entry.filePath);
+      if (idx !== -1) context.recentFiles.splice(idx, 1);
+    }
+    context.recentFiles.unshift(entry);
+    if (context.recentFiles.length > 50) context.recentFiles.length = 50;
+    this._saveFileContext(context);
+  }
+
+  /**
+   * Return recently mentioned / accessed files, newest first.
+   * @param {number} [limit=10]
+   * @returns {Array<{ filePath: string|null, fileName: string|null, mentionedAs: string|null, action: string, timestamp: number }>}
+   */
+  getRecentFiles(limit = 10) {
+    const context = this._loadFileContext();
+    return context.recentFiles.slice(0, limit);
+  }
+
+  /**
+   * Wipe the persisted file-context list.
+   */
+  clearRecentFiles() {
+    this._saveFileContext({ recentFiles: [] });
+  }
+
+  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
 
@@ -132,6 +184,42 @@ class ExecutionStateManager {
     const dir  = path.dirname(this.statePath);
     const base = path.basename(this.statePath, '.json');
     return path.join(dir, `${base}.checkpoint.${agentName}.json`);
+  }
+
+  /**
+   * Derive the path for the file-context store.
+   * e.g. ".rea-execution-state.filecontext.json"
+   * @returns {string}
+   */
+  _fileContextPath() {
+    const dir  = path.dirname(this.statePath);
+    const base = path.basename(this.statePath, '.json');
+    return path.join(dir, `${base}.filecontext.json`);
+  }
+
+  /**
+   * Load the file-context object from disk, returning a safe default on any error.
+   * @returns {{ recentFiles: Array }}
+   */
+  _loadFileContext() {
+    try {
+      const p = this._fileContextPath();
+      if (!fs.existsSync(p)) return { recentFiles: [] };
+      const raw = fs.readFileSync(p, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.recentFiles)) return { recentFiles: [] };
+      return parsed;
+    } catch {
+      return { recentFiles: [] };
+    }
+  }
+
+  /**
+   * Write the file-context object to disk.
+   * @param {{ recentFiles: Array }} context
+   */
+  _saveFileContext(context) {
+    fs.writeFileSync(this._fileContextPath(), JSON.stringify(context, null, 2), 'utf8');
   }
 }
 

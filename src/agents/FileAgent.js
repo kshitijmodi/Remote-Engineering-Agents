@@ -1,4 +1,9 @@
 const { readFileForTransfer } = require('../utils/FileHandler');
+const {
+  extractFileHint,
+  findInRecentFiles,
+  findInDirectories,
+} = require('../utils/FileMatching');
 
 /**
  * FileAgent
@@ -7,6 +12,10 @@ const { readFileForTransfer } = require('../utils/FileHandler');
  * message, reads the file via FileHandler (which enforces size limits and path
  * validation), and delivers it as a WhatsApp media attachment via the messaging
  * layer.
+ *
+ * When no explicit path is present the agent performs fuzzy matching against
+ * recently-accessed files (from conversation context) and/or a list of search
+ * directories.  If multiple candidates are found the user is asked to clarify.
  */
 class FileAgent {
   /**
@@ -24,17 +33,28 @@ class FileAgent {
    * too large, blocked extension, etc.) is caught and reported back to the user
    * as a plain-text reply.
    *
-   * @param {string} userId  - WhatsApp user ID
-   * @param {string} message - Raw message text, e.g. "send me file /var/log/app.log"
+   * @param {string} userId   - WhatsApp user ID
+   * @param {string} message  - Raw message text, e.g. "send me the report"
+   * @param {object} [context]
+   * @param {string[]} [context.recentFiles]  - recently accessed/mentioned file paths
+   * @param {string[]} [context.searchDirs]   - directories to scan for fuzzy matches
    * @returns {Promise<void>}
    */
-  async handle(userId, message) {
+  async handle(userId, message, context = {}) {
     let filePath;
+
+    // ── 1. Try to extract an explicit path from the message ──────────────────
     try {
       filePath = this._extractPath(message);
-    } catch (err) {
-      await this._messaging.sendMessage(userId, `Could not determine file path: ${err.message}`);
-      return;
+    } catch (_) {
+      // No explicit path — fall through to fuzzy resolution
+    }
+
+    // ── 2. Fuzzy resolution when no explicit path was found ──────────────────
+    if (!filePath) {
+      const resolved = await this._resolveVagueReference(userId, message, context);
+      if (!resolved) return; // error or clarification already sent
+      filePath = resolved;
     }
 
     console.log(`[FileAgent] User ${userId} requested file: ${filePath}`);
@@ -104,15 +124,19 @@ class FileAgent {
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   /**
-   * Extract the file path from a natural-language message.
+   * Extract an explicit file path from a natural-language message.
    *
    * Supports:
-   *   - Explicit absolute/relative paths:  "send me /var/log/app.log"
    *   - Quoted paths:                       'send "logs/app.log"'
-   *   - Last token fallback when no path is found
+   *   - Absolute Unix/Windows paths:        "send me /var/log/app.log"
+   *   - A word that looks like a filename:  "send report.pdf"
+   *
+   * Throws if no explicit path token is found (caller should fall back to
+   * fuzzy resolution via _resolveVagueReference).
    *
    * @param {string} message
    * @returns {string}
+   * @throws {Error} when no explicit path is identifiable
    */
   _extractPath(message) {
     if (!message || typeof message !== 'string') {
@@ -132,6 +156,86 @@ class FileAgent {
     if (extMatch) return extMatch[1].trim();
 
     throw new Error('No file path found in message');
+  }
+
+  /**
+   * Attempt to resolve a vague file reference (e.g. "that document", "the pdf",
+   * "my report") using FileMatching utilities.
+   *
+   * Resolution order:
+   *   1. Recent files from conversation context (fastest, most relevant)
+   *   2. Scan searchDirs with fuzzy matching (broader fallback)
+   *
+   * Returns the resolved absolute path, or `null` after sending an appropriate
+   * message to the user (clarification request or "no match" notice).
+   *
+   * @param {string}   userId
+   * @param {string}   message
+   * @param {object}   context
+   * @param {string[]} [context.recentFiles]
+   * @param {string[]} [context.searchDirs]
+   * @returns {Promise<string|null>}
+   */
+  async _resolveVagueReference(userId, message, context) {
+    const hint = extractFileHint(message);
+
+    if (!hint) {
+      await this._messaging.sendMessage(
+        userId,
+        "I couldn't figure out which file you meant. Please specify a filename or path."
+      );
+      return null;
+    }
+
+    console.log(`[FileAgent] Fuzzy resolving hint "${hint}" for user ${userId}`);
+
+    let matches = [];
+
+    // ── Priority 1: recent files from conversation context ───────────────────
+    const recentFiles = context.recentFiles || [];
+    if (recentFiles.length > 0) {
+      matches = findInRecentFiles(hint, recentFiles, { limit: 5 });
+    }
+
+    // ── Priority 2: scan provided search directories ─────────────────────────
+    if (matches.length === 0) {
+      const searchDirs = context.searchDirs || [];
+      if (searchDirs.length > 0) {
+        matches = findInDirectories(hint, searchDirs, { limit: 5 });
+      }
+    }
+
+    if (matches.length === 0) {
+      await this._messaging.sendMessage(
+        userId,
+        `I couldn't find any file matching *"${hint}"*. Please check the name and try again.`
+      );
+      return null;
+    }
+
+    // ── Exact / unambiguous match ────────────────────────────────────────────
+    if (matches.length === 1 || matches[0].score >= 1.0) {
+      console.log(`[FileAgent] Resolved "${hint}" → "${matches[0].filePath}" (score ${matches[0].score})`);
+      return matches[0].filePath;
+    }
+
+    // ── High-confidence single best match (score ≥ 0.9, clearly ahead) ───────
+    if (matches[0].score >= 0.9 && (matches.length < 2 || matches[0].score - matches[1].score >= 0.2)) {
+      console.log(`[FileAgent] High-confidence match "${hint}" → "${matches[0].filePath}" (score ${matches[0].score})`);
+      return matches[0].filePath;
+    }
+
+    // ── Ambiguous: ask for clarification ─────────────────────────────────────
+    const options = matches
+      .slice(0, 5)
+      .map((m, i) => `  ${i + 1}. ${m.filename}`)
+      .join('\n');
+
+    await this._messaging.sendMessage(
+      userId,
+      `I found multiple files matching *"${hint}"*. Which one did you mean?\n${options}\n\nReply with the number or the exact filename.`
+    );
+    return null;
   }
 }
 

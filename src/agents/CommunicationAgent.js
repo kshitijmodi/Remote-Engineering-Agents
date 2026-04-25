@@ -260,6 +260,50 @@ class CommunicationAgent {
   }
 
   /**
+   * Send an ambiguous-file clarification prompt to the user.
+   * Called when a vague file reference (e.g. "that document") resolves to
+   * multiple candidates.  Presents the filenames as a numbered choice list so
+   * the user can pick the intended file.
+   *
+   * @param {string} userId
+   * @param {{ filePath: string, filename: string, score: number, matchType: string }[]} matches
+   *   - Ranked list of candidate files from FileMatching
+   * @param {string} [hint] - The original vague reference the user made (used in the prompt body)
+   */
+  async sendFileAmbiguityPrompt(userId, matches, hint = '') {
+    if (!matches || matches.length === 0) {
+      await this.sendFileNotFoundMessage(userId, hint);
+      return;
+    }
+
+    // Single unambiguous match — no prompt needed; caller should send the file directly
+    if (matches.length === 1) return;
+
+    const hintLabel = hint ? `"${hint}"` : 'your request';
+    const question  = `I found ${matches.length} files that could match ${hintLabel}. Which one did you mean?`;
+    const choices   = matches.map((m) => m.filename);
+
+    await this.sendChoicePrompt(userId, question, choices, {
+      header: 'Multiple files found',
+      footer: 'Reply with the number of the file you want.',
+    });
+  }
+
+  /**
+   * Notify the user that no file could be found for their vague reference.
+   * @param {string} userId
+   * @param {string} [hint] - The original vague reference (shown in the message)
+   */
+  async sendFileNotFoundMessage(userId, hint = '') {
+    const hintLabel = hint ? ` matching "${hint}"` : '';
+    await this.send(
+      userId,
+      `Sorry, I couldn't find any file${hintLabel}. ` +
+      `Try being more specific — e.g. mention the filename or type (pdf, spreadsheet, etc.).`
+    );
+  }
+
+  /**
    * Send a generic choice list to the user.
    * Falls back to plain text if the provider does not support list messages.
    * @param {string} userId

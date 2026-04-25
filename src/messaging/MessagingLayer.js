@@ -14,6 +14,23 @@ class MessagingLayer {
 
     /** @type {function(Message): void|null} */
     this._messageCallback = null;
+
+    /** @type {import('../utils/ExecutionStateManager')|null} */
+    this._stateManager = null;
+  }
+
+  /**
+   * Wire an ExecutionStateManager instance so that every dispatched message is
+   * automatically enriched with the current file context (recently mentioned /
+   * accessed files) and can carry conversation history to downstream agents.
+   *
+   * Call this once during app initialisation, after creating the provider:
+   *   messagingLayer.setStateManager(stateManager);
+   *
+   * @param {import('../utils/ExecutionStateManager')} stateManager
+   */
+  setStateManager(stateManager) {
+    this._stateManager = stateManager;
   }
 
   /**
@@ -130,6 +147,15 @@ class MessagingLayer {
       if (handled) return;
     }
 
+    // Enrich the message with file context from the state manager so that
+    // downstream agents (FileAgent, IntentAgent) can resolve vague file
+    // references without needing a separate context lookup.
+    if (this._stateManager && !msg.fileContext) {
+      msg.fileContext = {
+        recentFiles: this._stateManager.getRecentFiles(20),
+      };
+    }
+
     if (typeof this._messageCallback === 'function') {
       this._messageCallback(msg);
     }
@@ -149,6 +175,21 @@ class MessagingLayer {
  * @property {LinkObject[]} links      - Array of extracted URLs from message text
  * @property {ButtonInteraction|null} buttonInteraction - Set when the message is a button
  *   response (quick reply or list selection); null for normal text messages.
+ * @property {FileContext|null} fileContext - Recently mentioned/accessed files from the
+ *   conversation; populated automatically by MessagingLayer when a state manager is wired
+ *   in via setStateManager().  Passed through to FileAgent so it can resolve vague
+ *   references ("this file", "that document") without an extra lookup.
+ * @property {string[]} [conversationHistory] - Optional ordered list of recent
+ *   conversation turns (e.g. ["user: ...", "assistant: ..."]) for agents that need
+ *   broader conversational context.  Populated by callers that track history externally.
+ */
+
+/**
+ * File context injected into every dispatched Message.
+ *
+ * @typedef {Object} FileContext
+ * @property {Array<{ filePath: string|null, fileName: string|null, mentionedAs: string|null, action: string, timestamp: number }>} recentFiles
+ *   - Recently mentioned or accessed files, newest first (up to 20 entries).
  */
 
 /**
@@ -231,9 +272,12 @@ function parseConfirmationCommand(text) {
  * @param {MediaAttachment[]}  [opts.media]
  * @param {LinkObject[]}       [opts.links]
  * @param {ButtonInteraction}  [opts.buttonInteraction]
+ * @param {FileContext}        [opts.fileContext]          - Pre-populated file context (optional;
+ *   MessagingLayer._dispatchMessage will fill this automatically when a state manager is set)
+ * @param {string[]}           [opts.conversationHistory] - Ordered recent conversation turns
  * @returns {Message}
  */
-function buildMessage({ userId, text, receivedAt, media, links, buttonInteraction }) {
+function buildMessage({ userId, text, receivedAt, media, links, buttonInteraction, fileContext, conversationHistory }) {
   const { isConfirmation, confirmationAction } = parseConfirmationCommand(text);
   return {
     userId,
@@ -244,6 +288,8 @@ function buildMessage({ userId, text, receivedAt, media, links, buttonInteractio
     media: Array.isArray(media) ? media : [],
     links: Array.isArray(links) ? links : [],
     buttonInteraction: buttonInteraction || null,
+    fileContext: fileContext || null,
+    conversationHistory: Array.isArray(conversationHistory) ? conversationHistory : [],
   };
 }
 
