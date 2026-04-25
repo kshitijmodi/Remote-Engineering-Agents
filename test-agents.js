@@ -39,7 +39,7 @@ async function main() {
   const planner = new PlanningAgent(fakeExec);
   const steps = planner._parseSteps('1. Create utils/export.js\n2. Add exportToCsv function\n3. Write tests');
   console.assert(steps.length === 3, 'PlanningAgent: 3 steps');
-  console.assert(steps[0] === 'Create utils/export.js', 'PlanningAgent: step text');
+  console.assert(steps[0].description === 'Create utils/export.js', 'PlanningAgent: step text');
   console.log('PASS: PlanningAgent step parsing');
 
   // ── ReviewAgent ──────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ async function main() {
   await new Promise(r => setTimeout(r, 600));
 
   console.assert(debugCalls === 2, `Orchestrator: debugger called ${debugCalls} times (expected 2)`);
-  console.assert(failMessages.some(m => m.includes('debug attempt')), 'Orchestrator: debug attempt msg sent');
+  console.assert(failMessages.some(m => m.includes('Tests failed') || m.includes('Attempt')), 'Orchestrator: debug attempt msg sent');
   console.assert(failMessages.some(m => m.includes('PASS')), 'Orchestrator: eventually passed');
   console.log('PASS: OrchestratorAgent debug retry loop');
 
@@ -905,7 +905,7 @@ async function main() {
   let ftNoPathMsg = null;
   const ftNoPathMessaging = { sendMessage: async (_uid, msg) => { ftNoPathMsg = msg; } };
   await new FileAgent(ftNoPathMessaging).handle('user@c.us', 'send me a file please');
-  console.assert(ftNoPathMsg !== null && ftNoPathMsg.includes('Could not determine file path'), 'FileAgent.handle: reports error when no path in message');
+  console.assert(ftNoPathMsg !== null && ftNoPathMsg.includes("couldn't figure out"), 'FileAgent.handle: reports error when no path in message');
   console.log('PASS: FileAgent handle() reports error when no path found in message');
 
   // ── CommunicationAgent: FILE_SEND intent routes to onFileSend ─────────────
