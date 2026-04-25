@@ -138,7 +138,8 @@ Your reply (one word only):`;
     const hasPronoun  = pronouns.test(message);
 
     // "send the pdf", "share that document", "give me the log"
-    if (hasSendVerb && hasFileType) return true;
+    // Guard: skip if the message is clearly a task/question about file-sending (e.g. "fix the bot so it can send files")
+    if (hasSendVerb && hasFileType && !this._hasStrongNonFileSignal(message)) return true;
 
     // "send that", "give me this", "forward it" — verb + pronoun implies a file
     // (only when no other clear task/question signal is dominant)
