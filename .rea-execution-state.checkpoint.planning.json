@@ -4,33 +4,33 @@
     "planSteps": [
       {
         "id": 1,
-        "description": "Create `src/utils/FileMatching.js` to implement fuzzy file matching and search by partial names/extensions"
+        "description": "Register `onFileSend` handler in `index.js` with `CommunicationAgent`"
       },
       {
         "id": 2,
-        "description": "Update `src/agents/FileAgent.js` to parse vague file references and use FileMatching for resolution"
+        "description": "In the handler, call `FileAgent.searchAndMatchFile()` to find the file using the request text"
       },
       {
         "id": 3,
-        "description": "Modify `src/utils/ExecutionStateManager.js` to track recently mentioned/accessed files in conversation context"
+        "description": "Read the matched file using `FileHandler.readFile()`"
       },
       {
         "id": 4,
-        "description": "Update `src/agents/IntentAgent.js` to extract file intent from natural language patterns (\"this file\", \"that document\", etc.)"
+        "description": "Send the file via `WhatsAppProvider.sendDocument()` with the file path and content"
       },
       {
         "id": 5,
-        "description": "Update `src/agents/CommunicationAgent.js` to handle ambiguous matches with clarification prompts to the user"
+        "description": "Add error handling for cases where file isn't found or read fails"
       },
       {
         "id": 6,
-        "description": "Update `src/messaging/MessagingLayer.js` to pass file context and conversation history to agents"
+        "description": "Pass `searchDirs` (project root) in context to `FileAgent` for file matching"
       },
       {
         "id": 7,
-        "description": "Update `test-agents.js` to test natural language file reference patterns and fuzzy matching edge cases"
+        "description": "Test by messaging the bot: `send me the PRD file` and verify it arrives on WhatsApp"
       }
     ]
   },
-  "timestamp": 1777087505263
+  "timestamp": 1777094513516
 }
