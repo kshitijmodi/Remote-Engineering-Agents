@@ -1,37 +1,41 @@
 {
   "agentName": "coding",
   "output": {
-    "taskText": "Ues",
+    "taskText": "I want option 2 where the bot sends me the file as attachment in this chat. Yes please check if bot's file-send feature is working after the recent fix",
     "planSteps": [
       {
         "id": 1,
-        "description": "Register `onFileSend` handler in `index.js` with `CommunicationAgent`"
+        "description": "Verify that `onFileSend` handler is registered in `index.js` — check if CommunicationAgent's FILE_SEND intent is wired to a handler function"
       },
       {
         "id": 2,
-        "description": "In the handler, call `FileAgent.searchAndMatchFile()` to find the file using the request text"
+        "description": "Confirm FileAgent receives `searchDirs` context in `index.js` — ensure it can locate files in the project"
       },
       {
         "id": 3,
-        "description": "Read the matched file using `FileHandler.readFile()`"
+        "description": "Verify WhatsAppProvider has a `sendFile()` method — check that it can send document attachments via WhatsApp API"
       },
       {
         "id": 4,
-        "description": "Send the file via `WhatsAppProvider.sendDocument()` with the file path and content"
+        "description": "Test end-to-end: Send \"send me the PRD file\" message via WhatsApp to the bot"
       },
       {
         "id": 5,
-        "description": "Add error handling for cases where file isn't found or read fails"
+        "description": "Verify the PRD file arrives as a document attachment in WhatsApp chat"
       },
       {
         "id": 6,
-        "description": "Pass `searchDirs` (project root) in context to `FileAgent` for file matching"
+        "description": "If file doesn't arrive, add logging to CommunicationAgent.onFileSend to trace the intent handling"
       },
       {
         "id": 7,
-        "description": "Test by messaging the bot: `send me the PRD file` and verify it arrives on WhatsApp"
+        "description": "If logging shows the handler is called but file doesn't send, debug FileAgent.findFile() to confirm it locates the PRD"
+      },
+      {
+        "id": 8,
+        "description": "If file is found but not sent, debug WhatsAppProvider.sendFile() to confirm it successfully uploads to WhatsApp"
       }
     ]
   },
-  "timestamp": 1777094855685
+  "timestamp": 1777095748790
 }
