@@ -1,4 +1,5 @@
 const { ClaudeCodeExecutor } = require('../claude/ClaudeCodeExecutor');
+const { extractFileHint } = require('../utils/FileMatching');
 
 /**
  * IntentAgent
@@ -33,10 +34,10 @@ class IntentAgent {
    * @returns {Promise<'TASK'|'QUESTION'|'STATUS'|'PUSH'|'FILE_SEND'>}
    */
   async classify(message, { contextBlock = '', activeStatus = null, hasActiveRepo = false, multimodal = null } = {}) {
-    // Fast path: detect file-send commands without burning an LLM call
-    if (/\bsend\s+me\s+file\s+\S+/i.test(message) ||
-        /\b(send|share|attach|give me|get me)\b.{0,60}\b(file|document|attachment|pdf|image|log)\b/i.test(message) ||
-        /\bsend\s+(me\s+)?(the\s+)?\/\S+/i.test(message)) {
+    // Fast path: detect file-send intent without burning an LLM call.
+    // Covers explicit paths, vague demonstratives ("this file", "that doc"),
+    // type-only references ("send the pdf"), and verb+pronoun combos ("send that").
+    if (this._isFileSendIntent(message)) {
       return 'FILE_SEND';
     }
     const situationLines = [
@@ -72,6 +73,8 @@ Classify the intent. Reply with exactly ONE word — no punctuation, no explanat
   STATUS    — user is checking on the progress of the current running task
   PUSH      — user wants to commit and push the current changes to GitHub
   FILE_SEND — user wants to receive a file, document, attachment, or log from the filesystem
+              (includes vague references like "send me this", "share that document", "give me the pdf",
+               "forward me the report", "can you send that file", "i need that script", "show me the log")
 
 Your reply (one word only):`;
 
@@ -88,6 +91,84 @@ Your reply (one word only):`;
 
     // Safe default: treat as a question so we answer rather than blindly starting a task
     return 'QUESTION';
+  }
+
+  /**
+   * Extract a file reference hint from a natural-language message.
+   * Delegates to FileMatching.extractFileHint so callers can get the hint
+   * without importing FileMatching directly.
+   *
+   * @param {string} message
+   * @returns {string|null}  partial name / type word, or null if nothing found
+   */
+  extractFileHint(message) {
+    return extractFileHint(message);
+  }
+
+  // ─── Internal ──────────────────────────────────────────────────────────────
+
+  /**
+   * Heuristic fast-path: returns true when the message is almost certainly a
+   * FILE_SEND request, without spending an LLM call.
+   *
+   * Covers:
+   *   - Explicit paths:          "send me /var/log/app.log"
+   *   - Verb + file-type word:   "share the pdf", "forward me the report"
+   *   - Demonstrative + type:    "this file", "that document", "the log"
+   *   - Verb + pronoun:          "send that", "give me this", "forward it"
+   *   - Type word alone (short): "the pdf please", "that spreadsheet"
+   *
+   * @param {string} message
+   * @returns {boolean}
+   */
+  _isFileSendIntent(message) {
+    if (!message || typeof message !== 'string') return false;
+
+    // Explicit absolute / relative path after a send-like verb
+    if (/\bsend\s+(me\s+)?(the\s+)?\/\S+/i.test(message)) return true;
+
+    // Any send-like verb followed (within 80 chars) by a file-type noun
+    const sendVerbs   = /\b(send|share|attach|give|get|forward|show|provide|transfer|gimme)\b/i;
+    const fileTypes   = /\b(file|document|doc|attachment|pdf|image|photo|picture|log|logs|report|spreadsheet|zip|archive|code|script|config|data|csv|excel|word|video|audio|folder)\b/i;
+    const pronouns    = /\b(this|that|it|them|these|those)\b/i;
+    const demonstratives = /\b(this|that|my|the)\b/i;
+
+    const hasSendVerb = sendVerbs.test(message);
+    const hasFileType = fileTypes.test(message);
+    const hasPronoun  = pronouns.test(message);
+
+    // "send the pdf", "share that document", "give me the log"
+    if (hasSendVerb && hasFileType) return true;
+
+    // "send that", "give me this", "forward it" — verb + pronoun implies a file
+    // (only when no other clear task/question signal is dominant)
+    if (hasSendVerb && hasPronoun && !this._hasStrongNonFileSignal(message)) return true;
+
+    // "this file", "that document", "the pdf" — demonstrative + file type,
+    // even without an explicit send verb (user is pointing at something)
+    if (demonstratives.test(message) && hasFileType && !this._hasStrongNonFileSignal(message)) return true;
+
+    // Explicit "send me file <token>" pattern
+    if (/\bsend\s+me\s+(file\s+)?\S+\.\w{1,6}\b/i.test(message)) return true;
+
+    return false;
+  }
+
+  /**
+   * Returns true when the message contains strong signals that it is a TASK or
+   * QUESTION rather than a file-send request.  Used as a guard in _isFileSendIntent
+   * to avoid false positives on messages like "show me how to use this file" or
+   * "what does that document contain?".
+   *
+   * @param {string} message
+   * @returns {boolean}
+   */
+  _hasStrongNonFileSignal(message) {
+    // Question words suggest QUESTION intent
+    if (/\b(how|why|what|when|where|who|explain|describe|tell me about|what does|what is|how do)\b/i.test(message)) return true;
+    // Coding task keywords suggest TASK intent
+    if (/\b(write|create|build|implement|fix|refactor|add|update|edit|modify|change|delete|make|code)\b/i.test(message)) return true;
+    return false;
   }
 }
 

@@ -1,41 +1,37 @@
 {
   "agentName": "coding",
   "output": {
-    "taskText": "1",
+    "taskText": "Can we improvize so the agent can understand even if i say send me this file or that document and so on? Without specifying a path or the exact filename",
     "planSteps": [
       {
         "id": 1,
-        "description": "Add `sendFileAttachment(to, filePath)` method to src/messaging/WhatsAppProvider.js to send files via WhatsApp API"
+        "description": "Create `src/utils/FileMatching.js` to implement fuzzy file matching and search by partial names/extensions"
       },
       {
         "id": 2,
-        "description": "Add `readFileForTransfer(filePath)` method to src/utils/FileHandler.js with security validation and error handling"
+        "description": "Update `src/agents/FileAgent.js` to parse vague file references and use FileMatching for resolution"
       },
       {
         "id": 3,
-        "description": "Update src/agents/IntentAgent.js to recognize file transfer commands (pattern: \"send me file <path>\")"
+        "description": "Modify `src/utils/ExecutionStateManager.js` to track recently mentioned/accessed files in conversation context"
       },
       {
         "id": 4,
-        "description": "Update src/agents/FileAgent.js to handle file transfer requests by reading file and returning metadata"
+        "description": "Update `src/agents/IntentAgent.js` to extract file intent from natural language patterns (\"this file\", \"that document\", etc.)"
       },
       {
         "id": 5,
-        "description": "Update src/agents/OrchestratorAgent.js to route file-transfer intents to FileAgent"
+        "description": "Update `src/agents/CommunicationAgent.js` to handle ambiguous matches with clarification prompts to the user"
       },
       {
         "id": 6,
-        "description": "Update src/agents/CommunicationAgent.js to coordinate with FileAgent and call WhatsAppProvider.sendFileAttachment()"
+        "description": "Update `src/messaging/MessagingLayer.js` to pass file context and conversation history to agents"
       },
       {
         "id": 7,
-        "description": "Add comprehensive error handling for file not found, access denied, and size limits across FileHandler and WhatsAppProvider"
-      },
-      {
-        "id": 8,
-        "description": "Create test case in test-agents.js to verify end-to-end file transfer"
+        "description": "Update `test-agents.js` to test natural language file reference patterns and fuzzy matching edge cases"
       }
     ]
   },
-  "timestamp": 1777085622638
+  "timestamp": 1777088440091
 }
