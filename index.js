@@ -417,6 +417,7 @@ async function main() {
     },
 
     onFileSend: async (userId, messageText, multimodal) => {
+      console.log(`[onFileSend] Handler invoked for ${userId} — message: "${messageText}"`);
       let repoPath;
       try {
         repoPath = repoAgent.getActiveRepoPath(userId);
@@ -446,11 +447,11 @@ async function main() {
       }
 
       // Step 4: Send the file via WhatsAppProvider.sendDocument()
-      const { resolvedPath, filename, mimeType, size } = fileData;
+      const { base64, filename, mimeType, size } = fileData;
       const sizeKB = (size / 1024).toFixed(1);
       const caption = `${filename} (${sizeKB} KB)`;
       try {
-        await messaging.sendDocument(userId, resolvedPath, mimeType, caption);
+        await messaging.sendDocument(userId, { mimeType, data: base64, filename, caption });
         console.log(`[FileAgent] Sent file "${filename}" (${sizeKB} KB) to ${userId}`);
       } catch (err) {
         console.error(`[FileAgent] Failed to send file "${filename}" to ${userId}:`, err.message);

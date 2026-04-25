@@ -224,13 +224,19 @@ class FileAgent {
     const recentFiles = context.recentFiles || [];
     if (recentFiles.length > 0) {
       matches = findInRecentFiles(hint, recentFiles, { limit: 5 });
+      console.log(`[FileAgent] findInRecentFiles("${hint}") — checked ${recentFiles.length} recent file(s), got ${matches.length} match(es)`);
     }
 
     // ── Priority 2: scan provided search directories ─────────────────────────
     if (matches.length === 0) {
       const searchDirs = context.searchDirs || [];
+      console.log(`[FileAgent] findInDirectories("${hint}") — searchDirs: ${JSON.stringify(searchDirs)}`);
       if (searchDirs.length > 0) {
         matches = findInDirectories(hint, searchDirs, { limit: 5 });
+        console.log(`[FileAgent] findInDirectories("${hint}") — found ${matches.length} match(es):`,
+          matches.map(m => `${m.filename} (score=${m.score}, matchType=${m.matchType})`));
+      } else {
+        console.log(`[FileAgent] findInDirectories skipped — no searchDirs provided`);
       }
     }
 

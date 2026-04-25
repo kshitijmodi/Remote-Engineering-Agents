@@ -427,6 +427,14 @@ class CommunicationAgent {
     // Multimodal context object forwarded to all handlers that accept it
     const multimodal = { media, urls: allUrls };
 
+    if (intent === 'FILE_SEND') {
+      console.log(
+        `[CommunicationAgent] FILE_SEND intent dispatching for ${userId} — ` +
+        `handler registered: ${typeof this._handlers.onFileSend === 'function'} — ` +
+        `text: "${effectiveText.slice(0, 80)}"`
+      );
+    }
+
     const dispatch = (() => {
       switch (intent) {
         case 'STATUS':    return this._handlers.onStatus?.(userId);
