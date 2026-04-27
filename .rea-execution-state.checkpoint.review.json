@@ -1,0 +1,9 @@
+{
+  "agentName": "review",
+  "output": {
+    "verdict": "FAIL",
+    "reasons": "**FAIL**\n\nReasons:\n\n1. **Incomplete fix for the duplication issue**: The context states slash commands appear twice — once in the planning message and again in a separate message. The fix should remove the *duplicate* message, not strip the instructions from the *primary* planning message. Users now won't see how to respond to the planning complete message.\n\n2. **UX regression**: Removing the `Reply with: /confirm — proceed...` instructions from the planning message leaves users without clear next steps in the main message.\n\n3. **Missing evidence of proper resolution**: The diff doesn't show:\n   - Where/how the duplicate instructions are now prevented\n   - Where instructions are being displayed instead\n   - What code removed the duplicate message\n\nThe correct fix should identify and remove the code that creates the *duplicate* message, while keeping the instructions in the original planning message.",
+    "passed": false
+  },
+  "timestamp": 1777309741457
+}

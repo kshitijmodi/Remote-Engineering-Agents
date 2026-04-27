@@ -366,7 +366,7 @@ class OrchestratorAgent extends EventEmitter {
       // Send the plan with confirmation instructions as a single message
       await this._notify(
         task.userId,
-        `✅ *Planning complete*${planningTimeStr}\n\n${formatPlan(result.steps)}\n\nReply with:\n• /confirm — proceed\n• /cancel — abort\n• /modify <changes> — revise plan`
+        `✅ *Planning complete*${planningTimeStr}\n\n${formatPlan(result.steps)}`
       );
 
       // Await user /confirm, /cancel, or /modify
