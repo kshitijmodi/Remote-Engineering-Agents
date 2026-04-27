@@ -1,7 +1,6 @@
 {
-  "agentName": "coding",
+  "agentName": "planning",
   "output": {
-    "taskText": "After planning, the confirm cancel modify slash options show in the bottom of planning message as well as another new message. So basically twice. It should only show once as part of planning message itself. I think it shows again separately because of the buttons I was trying to create. But remove that one. Ensure nothing else breaks or is changed",
     "planSteps": [
       {
         "id": 1,
@@ -29,5 +28,5 @@
       }
     ]
   },
-  "timestamp": 1777308088040
+  "timestamp": 1777307871821
 }

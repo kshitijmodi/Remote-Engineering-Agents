@@ -363,20 +363,11 @@ class OrchestratorAgent extends EventEmitter {
 
       const planningDuration = getStageDuration(task.stageTiming, STATES.PLANNING);
       const planningTimeStr = planningDuration != null ? ` in ${formatElapsed(planningDuration)}` : '';
-      // Always send the plan as plain text so steps are always visible
+      // Send the plan with confirmation instructions as a single message
       await this._notify(
         task.userId,
-        `✅ *Planning complete*${planningTimeStr}\n\n${formatPlan(result.steps)}`
+        `✅ *Planning complete*${planningTimeStr}\n\n${formatPlan(result.steps)}\n\nReply with:\n• /confirm — proceed\n• /cancel — abort\n• /modify <changes> — revise plan`
       );
-      // Then send interactive buttons if available, otherwise fall back to slash hint
-      if (this._sendInteractive) {
-        await this._sendInteractive(
-          task.userId,
-          this._agents.planning.buildPlanApprovalPrompt(result.steps)
-        );
-      } else {
-        await this._notify(task.userId, `Reply /confirm, /cancel, or /modify <changes>`);
-      }
 
       // Await user /confirm, /cancel, or /modify
       const confirmResult = await this._awaitConfirmation(task);
