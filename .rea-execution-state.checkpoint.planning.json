@@ -1,0 +1,28 @@
+{
+  "agentName": "planning",
+  "output": {
+    "planSteps": [
+      {
+        "id": 1,
+        "description": "**formatPlan()** in StatusFormatter.js (line 144) includes: `Reply /confirm to start, /cancel to abort, or /modify <changes> to revise.`"
+      },
+      {
+        "id": 2,
+        "description": "**OrchestratorAgent._stagePlanning()** (line 367-370) adds its own: `Reply with:\\n• /confirm — proceed\\n• /cancel — abort\\n• /modify <changes> — revise plan`"
+      },
+      {
+        "id": 3,
+        "description": "Remove the redundant slash command instructions from OrchestratorAgent._stagePlanning() (lines 368-370 in the notify message)"
+      },
+      {
+        "id": 4,
+        "description": "Keep the formatPlan() output which already includes slash command instructions"
+      },
+      {
+        "id": 5,
+        "description": "Verify the message still reads clearly and includes all necessary instructions"
+      }
+    ]
+  },
+  "timestamp": 1777309577290
+}
