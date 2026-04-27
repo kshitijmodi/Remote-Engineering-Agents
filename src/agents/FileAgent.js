@@ -220,9 +220,10 @@ class FileAgent {
     const absMatch = message.match(/([/\\][^\s]+|[A-Za-z]:[/\\][^\s]+)/);
     if (absMatch) return absMatch[1].trim();
 
-    // 3. A word that looks like a file (has an extension)
-    const extMatch = message.match(/\b(\S+\.\w{1,6})\b/);
-    if (extMatch) return extMatch[1].trim();
+    // Rule 3 intentionally removed: bare filenames like "headshots.jpg" must NOT be
+    // returned here. path.resolve("headshots.jpg") always resolves to process.cwd(),
+    // which is the REA folder — wrong for any other initialized workspace.
+    // Bare filenames fall through to _resolveVagueReference which uses searchDirs.
 
     throw new Error('No file path found in message');
   }
