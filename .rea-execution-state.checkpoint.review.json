@@ -1,9 +1,0 @@
-{
-  "agentName": "review",
-  "output": {
-    "verdict": "PASS",
-    "reasons": "Looks good.",
-    "passed": true
-  },
-  "timestamp": 1777308156187
-}
