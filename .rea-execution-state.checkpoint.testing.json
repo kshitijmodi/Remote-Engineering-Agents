@@ -1,7 +1,7 @@
 {
   "agentName": "testing",
   "output": {
-    "lastTestOutput": "STATUS: PASS\nPASSED: 0\nFAILED: 0\nDETAILS: All tests passed"
+    "lastTestOutput": "STATUS: PASS\nPASSED: 0\nFAILED: 0\nDETAILS: No tests were collected or run"
   },
-  "timestamp": 1777309725484
+  "timestamp": 1777311668796
 }

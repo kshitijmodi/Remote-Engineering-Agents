@@ -396,6 +396,16 @@ async function main() {
       await reliableSend(userId, 'Context cleared for this repo.');
     },
 
+    onRemove: async (userId, repoName) => {
+      const { removed, wasActive } = repoAgent.removeRepo(userId, repoName);
+      if (!removed) {
+        await reliableSend(userId, `No workspace named *${repoName}* found. Use /list to see registered workspaces.`);
+        return;
+      }
+      const activeNote = wasActive ? '\nNo active workspace set — use /switch or /init to pick one.' : '';
+      await reliableSend(userId, `Removed *${repoName}* from registered workspaces. Files on disk are untouched.${activeNote}`);
+    },
+
     onList: async (userId) => {
       const workspaceRepos = repoAgent.listRepos();
       const customRepos = [...(repoAgent._customPaths?.keys() ?? [])];
