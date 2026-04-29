@@ -528,6 +528,14 @@ class CommunicationAgent {
         this._handlers.onClearContext?.(userId);
         break;
 
+      case '/remove':
+        if (!arg) {
+          await this.send(userId, 'Usage: /remove <workspace-name>');
+          return;
+        }
+        this._handlers.onRemove?.(userId, arg);
+        break;
+
       case '/list':
         this._handlers.onList?.(userId);
         break;
@@ -547,6 +555,7 @@ class CommunicationAgent {
           `/init "<local-path>" — set a local folder as active workspace\n` +
           `/connect <repo-url> — clone a GitHub repo and set as active workspace\n` +
           `/switch <repo-name> — switch between registered workspaces\n` +
+          `/remove <repo-name> — unregister a workspace (files are NOT deleted)\n` +
           `/list — show all registered workspaces\n` +
           `/repo — show currently active workspace\n\n` +
           `*Tasks*\n` +

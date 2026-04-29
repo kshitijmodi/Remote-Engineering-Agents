@@ -160,6 +160,38 @@ class RepoAgent {
   }
 
   /**
+   * Remove a workspace from the registry.
+   * Does NOT delete files — only removes the entry from the active repo map and customPaths.
+   * If the removed workspace was the user's active one, their active repo is cleared.
+   *
+   * @param {string} userId
+   * @param {string} repoName
+   * @returns {{ removed: boolean, wasActive: boolean }}
+   */
+  removeRepo(userId, repoName) {
+    const name = repoName.trim();
+    const inCustom = this._customPaths?.has(name);
+    const inWorkspace = fs.existsSync(path.join(WORKSPACE_DIR, name));
+
+    if (!inCustom && !inWorkspace) {
+      return { removed: false, wasActive: false };
+    }
+
+    if (inCustom) this._customPaths.delete(name);
+
+    let wasActive = false;
+    for (const [uid, active] of this._activeRepo.entries()) {
+      if (active === name) {
+        this._activeRepo.delete(uid);
+        if (uid === userId) wasActive = true;
+      }
+    }
+
+    this._saveActiveRepos();
+    return { removed: true, wasActive };
+  }
+
+  /**
    * List all cloned repos in workspace/.
    * @returns {string[]}
    */

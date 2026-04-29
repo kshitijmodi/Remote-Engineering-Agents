@@ -286,7 +286,7 @@ The gateway between WhatsApp and the rest of the system. Every inbound message p
 
 **Key responsibilities:**
 - **Whitelist authentication** — silently drops messages from any number not in `ALLOWED_NUMBERS`; authorized senders are never aware of rejections
-- **Slash command parsing** — intercepts `/connect`, `/init`, `/switch`, `/confirm`, `/modify`, `/resume`, `/cancel`, `/push`, `/logs`, `/list`, `/repo`, `/clear-context`, `/restart`, `/stop`, and `/help`, then calls the appropriate handler
+- **Slash command parsing** — intercepts `/connect`, `/init`, `/switch`, `/remove`, `/confirm`, `/modify`, `/resume`, `/cancel`, `/push`, `/logs`, `/list`, `/repo`, `/clear-context`, `/restart`, `/stop`, and `/help`, then calls the appropriate handler
 - **Intent-based routing** — passes free-text messages through the IntentAgent classifier (or a heuristic fallback) and routes them as `TASK`, `QUESTION`, `STATUS`, or `PUSH`
 - **Progress formatting** — subscribes to `stageChanged` events from the Orchestrator and sends formatted stage-completion messages to the user
 - **Plan confirmation flow** — sends formatted plan previews and collects `/confirm`, `/modify`, or `/cancel` responses
@@ -457,7 +457,7 @@ Manages the workspace: cloning repos, switching between them, and enforcing one-
 - **Workspace switching** — `/switch <name>` changes the active repo for a user without re-cloning
 - **Exclusive task locking** — `acquireLock()` prevents two tasks from running concurrently on the same repo; returns a `release` function the Orchestrator calls when the task ends
 
-**Interacts with:** CommunicationAgent/index.js (workspace commands `/connect`, `/init`, `/switch`, `/list`, `/repo` are routed here from the command handler layer), OrchestratorAgent (calls `acquireLock()` before starting a task and the returned `release()` when the task ends). Shells out to `git` and `gh` for cloning — no other agent dependency.
+**Interacts with:** CommunicationAgent/index.js (workspace commands `/connect`, `/init`, `/switch`, `/remove`, `/list`, `/repo` are routed here from the command handler layer), OrchestratorAgent (calls `acquireLock()` before starting a task and the returned `release()` when the task ends). Shells out to `git` and `gh` for cloning — no other agent dependency.
 
 ---
 
@@ -485,6 +485,7 @@ Reviews the code diff produced by the task before a PR is created.
 | **Workspace** | `/init "<local-path>"` | Set a local folder as active workspace |
 | **Workspace** | `/connect <repo-url>` | Clone a GitHub repo and set as active workspace |
 | **Workspace** | `/switch <repo-name>` | Switch between registered workspaces |
+| **Workspace** | `/remove <repo-name>` | Unregister a workspace (files on disk are NOT deleted) |
 | **Workspace** | `/list` | Show all registered workspaces |
 | **Workspace** | `/repo` | Show currently active workspace |
 | **Tasks** | `/push [branch]` | Commit and push changes to GitHub, open PR |
