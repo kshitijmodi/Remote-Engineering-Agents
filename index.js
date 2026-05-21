@@ -407,16 +407,43 @@ async function main() {
     },
 
     onRepoList: async (userId) => {
-      const workspaceRepos = repoAgent.listRepos();
-      const customRepos = [...(repoAgent._customPaths?.keys() ?? [])];
-      const activeRepo = repoAgent.getActiveRepo(userId);
-      const all = [...new Set([...workspaceRepos, ...customRepos])];
-      if (!all.length) {
-        await reliableSend(userId, 'No repos registered. Use /connect or /init to add one.');
+      let repoPath;
+      try {
+        repoPath = repoAgent.getActiveRepoPath(userId);
+      } catch {
+        await reliableSend(userId, 'No active repo. Use /connect <repo-url> or /switch <repo-name> first.');
         return;
       }
-      const lines = all.map(r => `${r === activeRepo ? '▶ ' : '  '}${r}`);
-      await reliableSend(userId, `*Registered workspaces:*\n${lines.join('\n')}\n\n▶ = active`);
+
+      try {
+        const IGNORE = new Set(['.git', 'node_modules', '__pycache__', '.DS_Store']);
+        const lines = [];
+
+        function walk(dir, prefix = '', depth = 0) {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+            .filter(e => !IGNORE.has(e.name))
+            .sort((a, b) => {
+              if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const isLast = i === entries.length - 1;
+            lines.push(`${prefix}${isLast ? '└── ' : '├── '}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+            if (entry.isDirectory() && depth < 2) {
+              walk(path.join(dir, entry.name), prefix + (isLast ? '    ' : '│   '), depth + 1);
+            }
+          }
+        }
+
+        lines.push(`${path.basename(repoPath)}/`);
+        walk(repoPath);
+
+        const tree = lines.join('\n');
+        await reliableSend(userId, `*Files in current repo:*\n\`\`\`\n${tree}\n\`\`\``);
+      } catch (err) {
+        await reliableSend(userId, `Error listing repo contents: ${err.message}`);
+      }
     },
 
     onListRepo: async (userId) => {

@@ -1,16 +1,6 @@
 [
   {
     "role": "assistant",
-    "text": "Task completed: Fix these issues",
-    "timestamp": "2026-04-25T18:16:35.194Z"
-  },
-  {
-    "role": "user",
-    "text": "Would this need restart of bot?",
-    "timestamp": "2026-04-25T18:48:03.377Z"
-  },
-  {
-    "role": "assistant",
     "text": "Yes, the bot needs a restart to pick up the code changes. The fixes are in the JavaScript source files, so any running Node.js process still has the old code in memory.Yes, the bot needs to be restarted to pick up the code changes. Just stop the current process and start it again with whatever command you normally use to run it.",
     "timestamp": "2026-04-25T18:48:03.420Z"
   },
@@ -48,5 +38,15 @@
     "role": "user",
     "text": "Fix it",
     "timestamp": "2026-05-21T17:43:08.575Z"
+  },
+  {
+    "role": "assistant",
+    "text": "Task completed: Fix it",
+    "timestamp": "2026-05-21T17:45:31.085Z"
+  },
+  {
+    "role": "user",
+    "text": "Change the repolist slash such that it only shows upto 3 layers of the folder. So within a repo, it shows the list within that repo and 2 more layers within it. And don't truncate the message",
+    "timestamp": "2026-05-21T18:19:37.444Z"
   }
 ]

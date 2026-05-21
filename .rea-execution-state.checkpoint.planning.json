@@ -1,7 +1,6 @@
 {
-  "agentName": "coding",
+  "agentName": "planning",
   "output": {
-    "taskText": "Change the repolist slash such that it only shows upto 3 layers of the folder. So within a repo, it shows the list within that repo and 2 more layers within it. And don't truncate the message",
     "planSteps": [
       {
         "id": 1,
@@ -21,5 +20,5 @@
       }
     ]
   },
-  "timestamp": 1779387748178
+  "timestamp": 1779387638170
 }
