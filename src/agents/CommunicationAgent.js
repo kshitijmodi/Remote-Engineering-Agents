@@ -537,7 +537,11 @@ class CommunicationAgent {
         break;
 
       case '/list':
-        this._handlers.onList?.(userId);
+        this._handlers.onListRepo?.(userId);
+        break;
+
+      case '/repolist':
+        this._handlers.onRepoList?.(userId);
         break;
 
       case '/restart':
@@ -556,8 +560,9 @@ class CommunicationAgent {
           `/connect <repo-url> — clone a GitHub repo and set as active workspace\n` +
           `/switch <repo-name> — switch between registered workspaces\n` +
           `/remove <repo-name> — unregister a workspace (files are NOT deleted)\n` +
-          `/list — show all registered workspaces\n` +
-          `/repo — show currently active workspace\n\n` +
+          `/repolist — show all registered workspaces\n` +
+          `/repo — show currently active workspace\n` +
+          `/list — show everything in the current repo\n\n` +
           `*Tasks*\n` +
           `Just type naturally — e.g. "Add a dark mode toggle"\n` +
           `/confirm — approve the plan and start execution\n` +

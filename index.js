@@ -406,7 +406,7 @@ async function main() {
       await reliableSend(userId, `Removed *${repoName}* from registered workspaces. Files on disk are untouched.${activeNote}`);
     },
 
-    onList: async (userId) => {
+    onRepoList: async (userId) => {
       const workspaceRepos = repoAgent.listRepos();
       const customRepos = [...(repoAgent._customPaths?.keys() ?? [])];
       const activeRepo = repoAgent.getActiveRepo(userId);
@@ -417,6 +417,48 @@ async function main() {
       }
       const lines = all.map(r => `${r === activeRepo ? '▶ ' : '  '}${r}`);
       await reliableSend(userId, `*Registered workspaces:*\n${lines.join('\n')}\n\n▶ = active`);
+    },
+
+    onListRepo: async (userId) => {
+      let repoPath;
+      try {
+        repoPath = repoAgent.getActiveRepoPath(userId);
+      } catch {
+        await reliableSend(userId, 'No active repo. Use /connect <repo-url> or /switch <repo-name> first.');
+        return;
+      }
+
+      try {
+        const IGNORE = new Set(['.git', 'node_modules', '__pycache__', '.DS_Store']);
+        const lines = [];
+
+        function walk(dir, prefix = '') {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+            .filter(e => !IGNORE.has(e.name))
+            .sort((a, b) => {
+              if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const isLast = i === entries.length - 1;
+            lines.push(`${prefix}${isLast ? '└── ' : '├── '}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+            if (entry.isDirectory()) {
+              walk(path.join(dir, entry.name), prefix + (isLast ? '    ' : '│   '));
+            }
+          }
+        }
+
+        lines.push(`${path.basename(repoPath)}/`);
+        walk(repoPath);
+
+        const tree = lines.join('\n');
+        const MAX_LEN = 3000;
+        const output = tree.length > MAX_LEN ? tree.slice(0, MAX_LEN) + '\n... (truncated)' : tree;
+        await reliableSend(userId, `*Files in current repo:*\n\`\`\`\n${output}\n\`\`\``);
+      } catch (err) {
+        await reliableSend(userId, `Error listing repo contents: ${err.message}`);
+      }
     },
 
     onRestart: async (userId) => {
