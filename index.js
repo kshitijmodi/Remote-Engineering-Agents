@@ -407,17 +407,16 @@ async function main() {
     },
 
     onRepoList: async (userId) => {
-      try {
-        const repos = repoAgent.listRepos();
-        if (repos.length === 0) {
-          await reliableSend(userId, 'No repositories found. Use /connect <repo-url> to add one.');
-          return;
-        }
-        const list = repos.map(r => `• ${r}`).join('\n');
-        await reliableSend(userId, `*Available repositories:*\n${list}`);
-      } catch (err) {
-        await reliableSend(userId, `Error listing repositories: ${err.message}`);
+      const workspaceRepos = repoAgent.listRepos();
+      const customRepos = [...(repoAgent._customPaths?.keys() ?? [])];
+      const activeRepo = repoAgent.getActiveRepo(userId);
+      const all = [...new Set([...workspaceRepos, ...customRepos])];
+      if (!all.length) {
+        await reliableSend(userId, 'No repos registered. Use /connect or /init to add one.');
+        return;
       }
+      const lines = all.map(r => `${r === activeRepo ? '▶ ' : '  '}${r}`);
+      await reliableSend(userId, `*Registered workspaces:*\n${lines.join('\n')}\n\n▶ = active`);
     },
 
     onListRepo: async (userId) => {
