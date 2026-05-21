@@ -407,42 +407,16 @@ async function main() {
     },
 
     onRepoList: async (userId) => {
-      let repoPath;
       try {
-        repoPath = repoAgent.getActiveRepoPath(userId);
-      } catch {
-        await reliableSend(userId, 'No active repo. Use /connect <repo-url> or /switch <repo-name> first.');
-        return;
-      }
-
-      try {
-        const IGNORE = new Set(['.git', 'node_modules', '__pycache__', '.DS_Store']);
-        const lines = [];
-
-        function walk(dir, prefix = '', depth = 0) {
-          const entries = fs.readdirSync(dir, { withFileTypes: true })
-            .filter(e => !IGNORE.has(e.name))
-            .sort((a, b) => {
-              if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-              return a.name.localeCompare(b.name);
-            });
-          for (let i = 0; i < entries.length; i++) {
-            const entry = entries[i];
-            const isLast = i === entries.length - 1;
-            lines.push(`${prefix}${isLast ? '└── ' : '├── '}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-            if (entry.isDirectory() && depth < 2) {
-              walk(path.join(dir, entry.name), prefix + (isLast ? '    ' : '│   '), depth + 1);
-            }
-          }
+        const repos = repoAgent.listRepos();
+        if (repos.length === 0) {
+          await reliableSend(userId, 'No repositories found. Use /connect <repo-url> to add one.');
+          return;
         }
-
-        lines.push(`${path.basename(repoPath)}/`);
-        walk(repoPath);
-
-        const tree = lines.join('\n');
-        await reliableSend(userId, `*Files in current repo:*\n\`\`\`\n${tree}\n\`\`\``);
+        const list = repos.map(r => `• ${r}`).join('\n');
+        await reliableSend(userId, `*Available repositories:*\n${list}`);
       } catch (err) {
-        await reliableSend(userId, `Error listing repo contents: ${err.message}`);
+        await reliableSend(userId, `Error listing repositories: ${err.message}`);
       }
     },
 
