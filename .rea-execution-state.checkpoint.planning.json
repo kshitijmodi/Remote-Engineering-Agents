@@ -4,37 +4,41 @@
     "planSteps": [
       {
         "id": 1,
-        "description": "Review button click patterns in main.py to identify all `st.rerun()` calls causing flickering (lines: 1029, 1228, 1257, 1447, 1461, 1546, 1632, 1642, 1652, 1670)"
+        "description": "Update `/list` command in CommunicationAgent.js to call `onListRepo` instead of `onList`"
       },
       {
         "id": 2,
-        "description": "Create callback functions in main.py to handle button state changes and store them in `st.session_state` instead of calling `st.rerun()`"
+        "description": "Add new `/repolist` command handler in CommunicationAgent.js that calls `onList`"
       },
       {
         "id": 3,
-        "description": "Replace the login form submit `st.rerun()` (line 1029) with proper session state management using form submission callback"
+        "description": "Create new `onListRepo` handler in index.js that generates file listing for current repo"
       },
       {
         "id": 4,
-        "description": "Remove `st.rerun()` after \"Save Address\" button (line 1228) and use session state to trigger re-render"
+        "description": "Update `/help` command text in CommunicationAgent.js to reflect `/list` and `/repolist` changes"
       },
       {
         "id": 5,
-        "description": "Remove `st.rerun()` after \"Update Address\" button (line 1257) and manage state without explicit rerun"
+        "description": "Rename existing `onList` handler in index.js to `onRepoList`"
       },
       {
         "id": 6,
-        "description": "Remove `st.rerun()` after \"Accept Order\" button (line 1447) and use session state callbacks instead"
+        "description": "Create new `onListRepo` handler in index.js that shows current repo file tree/contents"
       },
       {
         "id": 7,
-        "description": "Remove `st.rerun()` after \"Mark as Ready\" button (line 1461) and refactor with proper state management"
+        "description": "**CommunicationAgent.js** — Updated slash command routing:"
       },
       {
         "id": 8,
-        "description": "Replace remaining `st.rerun()` calls in driver portal (lines 1546, 1632, 1642, 1652, 1670) with session state-based updates and callback functions"
+        "description": "**CommunicationAgent.js** — Updated `/help` text:"
+      },
+      {
+        "id": 9,
+        "description": "**index.js** — Created new `onListRepo` handler:"
       }
     ]
   },
-  "timestamp": 1777311078320
+  "timestamp": 1779384821166
 }
