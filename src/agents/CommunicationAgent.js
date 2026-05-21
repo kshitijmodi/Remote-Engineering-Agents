@@ -541,7 +541,7 @@ class CommunicationAgent {
         break;
 
       case '/repolist':
-        this._handlers.onList?.(userId);
+        this._handlers.onRepoList?.(userId);
         break;
 
       case '/restart':
