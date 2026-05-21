@@ -1,7 +1,7 @@
 {
   "agentName": "testing",
   "output": {
-    "lastTestOutput": "STATUS: PASS\nPASSED: 0\nFAILED: 0\nDETAILS: All tests passed"
+    "lastTestOutput": "STATUS: PASS\nPASSED: 0\nFAILED: 0\nDETAILS: No tests configured — test script only echoes a message and exits successfully"
   },
-  "timestamp": 1779387792561
+  "timestamp": 1779388744808
 }
