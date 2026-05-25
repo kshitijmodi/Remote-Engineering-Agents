@@ -552,6 +552,10 @@ class CommunicationAgent {
         this._handlers.onStop?.(userId);
         break;
 
+      case '/finance':
+        this._handlers.onFinance?.(userId, arg);
+        break;
+
       case '/help':
         await this.send(userId,
           `*Available Commands:*\n\n` +
@@ -571,6 +575,9 @@ class CommunicationAgent {
           `/cancel — cancel the running task\n` +
           `/resume — extend budget by 10 and continue a paused task\n` +
           `/logs — show recent task logs\n\n` +
+          `*Finance (ArthaOS)*\n` +
+          `/finance <question> — ask your personal finance AI\n` +
+          `Example: /finance What did I spend most on this month?\n\n` +
           `*Bot Control*\n` +
           `/restart — gracefully restart the bot (requires pm2)\n` +
           `/stop — gracefully stop the bot\n\n` +
