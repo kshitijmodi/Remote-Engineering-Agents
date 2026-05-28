@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 const { WhatsAppProvider } = require('./src/messaging/WhatsAppProvider');
 const { CommunicationAgent } = require('./src/agents/CommunicationAgent');
 const { ClaudeCodeExecutor } = require('./src/claude/ClaudeCodeExecutor');
@@ -28,6 +29,9 @@ const ALLOWED_NUMBERS = process.env.ALLOWED_NUMBERS
 const HEARTBEAT_INTERVAL_MS = 60_000;   // 60s
 const MSG_RETRY_ATTEMPTS     = 3;
 const CHECKPOINT_DIR         = path.resolve('./checkpoints');
+
+const ARTHAOS_API_URL   = process.env.ARTHAOS_API_URL  || 'http://localhost:8000';
+const ARTHAOS_ALERT_PORT = parseInt(process.env.ARTHAOS_ALERT_PORT || '8001', 10);
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
@@ -472,6 +476,38 @@ async function main() {
       setTimeout(() => process.exit(0), 1000);
     },
 
+    onFinance: async (userId, query) => {
+      if (!query) {
+        await reliableSend(userId,
+          '💰 *ArthaOS — Personal Finance AI*\n\n' +
+          'Usage: `/finance <question>`\n\n' +
+          'Examples:\n' +
+          '• /finance What did I spend most on this month?\n' +
+          '• /finance How much did I spend on dining last month?\n' +
+          '• /finance Can I afford a $500 purchase?\n' +
+          '• /finance Show my top 3 expense categories'
+        );
+        return;
+      }
+      await reliableSend(userId, '💰 _Checking ArthaOS..._');
+      try {
+        const resp = await fetch(`${ARTHAOS_API_URL}/finance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        if (!resp.ok) throw new Error(`ArthaOS returned HTTP ${resp.status}`);
+        const data = await resp.json();
+        let answer = data.answer || 'No answer returned.';
+        if (data.low_confidence) {
+          answer += '\n\n_⚠️ Low confidence — open the dashboard for full details._';
+        }
+        await reliableSend(userId, answer);
+      } catch (err) {
+        await reliableSend(userId, `❌ ArthaOS unreachable: ${err.message}`);
+      }
+    },
+
     onFileSend: async (userId, messageText, multimodal) => {
       console.log(`[onFileSend] Handler invoked for ${userId} — message: "${messageText}"`);
       let repoPath;
@@ -515,6 +551,36 @@ async function main() {
       }
     },
   }, classifyIntent);
+
+  // ── ArthaOS alert receiver ────────────────────────────────────────────────
+  // ArthaOS POSTs here when a high-severity alert fires.
+  // We forward the message to every allowed WhatsApp number.
+  const alertServer = http.createServer((req, res) => {
+    if (req.method !== 'POST' || req.url !== '/alert') {
+      res.writeHead(404); res.end();
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body);
+        const message = payload.message || String(payload);
+        console.log('[ArthaOS] Alert received:', message.slice(0, 100));
+        for (const userId of ALLOWED_NUMBERS) {
+          await reliableSend(userId, `🚨 *ArthaOS Alert*\n\n${message}`);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'sent', recipients: ALLOWED_NUMBERS.length }));
+      } catch (err) {
+        console.error('[ArthaOS] Alert handler error:', err.message);
+        res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  });
+  alertServer.listen(ARTHAOS_ALERT_PORT, () => {
+    console.log(`[ArthaOS] Alert receiver listening on port ${ARTHAOS_ALERT_PORT}`);
+  });
 
   commAgent.start();
 
