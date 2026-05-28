@@ -578,7 +578,7 @@ async function main() {
       }
     });
   });
-  alertServer.listen(ARTHAOS_ALERT_PORT, () => {
+  alertServer.listen({ port: ARTHAOS_ALERT_PORT, host: '::', reuseAddress: true }, () => {
     console.log(`[ArthaOS] Alert receiver listening on port ${ARTHAOS_ALERT_PORT}`);
   });
 
