@@ -3,6 +3,7 @@ const { buildQuickReply, buildListMessage } = require('../ui/WhatsAppButtons');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { MessagingLayer, buildMessage } = require('./MessagingLayer');
 const { extractMediaMetadata } = require('../utils/MultimodalHandler');
 
@@ -24,6 +25,14 @@ const AUTH_PATH = path.resolve('./.wwebjs_auth_business');
 class WhatsAppProvider extends MessagingLayer {
   constructor() {
     super();
+    // Kill any leftover Chromium from a previous crashed run before starting
+    try { execSync('pkill -9 -f puppeteer/chrome 2>/dev/null || true', { stdio: 'ignore' }); } catch {}
+    const sessionDir = path.join(AUTH_PATH, 'session');
+    if (fs.existsSync(sessionDir)) {
+      ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
+        try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
+      });
+    }
     this._client = new Client({
       authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
       puppeteer: {
