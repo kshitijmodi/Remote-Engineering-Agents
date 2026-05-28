@@ -491,10 +491,10 @@ async function main() {
       }
       await reliableSend(userId, '💰 _Checking ArthaOS..._');
       try {
-        const resp = await fetch(`${ARTHAOS_API_URL}/whatsapp/query`, {
+        const resp = await fetch(`${ARTHAOS_API_URL}/finance`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, sender: userId }),
+          body: JSON.stringify({ query }),
         });
         if (!resp.ok) throw new Error(`ArthaOS returned HTTP ${resp.status}`);
         const data = await resp.json();

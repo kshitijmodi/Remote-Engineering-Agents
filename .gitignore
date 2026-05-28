@@ -6,3 +6,5 @@ logs/
 checkpoints/
 .env
 *.log
+.rea-context.json
+.rea-execution-state*.json
