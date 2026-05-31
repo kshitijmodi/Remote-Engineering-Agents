@@ -18,6 +18,7 @@ const { FileAgent } = require('./src/agents/FileAgent');
 const { formatStepInProgress } = require('./src/utils/StatusFormatter');
 const { processLinksFromText } = require('./src/utils/LinkProcessor');
 const ExecutionStateManager = require('./src/utils/ExecutionStateManager');
+const { FinanceSession } = require('./src/finance/FinanceSession');
 const fs = require('fs');
 const path = require('path');
 
@@ -32,6 +33,9 @@ const CHECKPOINT_DIR         = path.resolve('./checkpoints');
 
 const ARTHAOS_API_URL   = process.env.ARTHAOS_API_URL  || 'http://localhost:8000';
 const ARTHAOS_ALERT_PORT = parseInt(process.env.ARTHAOS_ALERT_PORT || '8001', 10);
+
+// Finance mode sessions — one per user, persists across messages until /exit or 30-min timeout
+const financeSession = new FinanceSession();
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
@@ -145,6 +149,12 @@ async function main() {
     if (fileAgent.hasPendingDisambiguation(userId)) {
       return 'FILE_SEND';
     }
+
+    // If the user is in an active finance session, route all non-slash messages
+    // to the finance follow-up handler (slash commands are handled separately).
+    if (financeSession.isActive(userId)) {
+      return 'FINANCE_SESSION';
+    }
     let contextBlock = '';
     let activeStatus = null;
     let hasActiveRepo = false;
@@ -158,6 +168,30 @@ async function main() {
       activeStatus = task.status;
     }
     return intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
+  }
+
+  // ── ArthaOS finance query helper ──────────────────────────────────────────
+  // Calls /whatsapp/query with full session history, saves the turn, replies.
+  async function _callArthaOS(userId, query) {
+    const history = financeSession.getHistory(userId);
+    try {
+      const resp = await fetch(`${ARTHAOS_API_URL}/whatsapp/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, history }),
+      });
+      if (!resp.ok) throw new Error(`ArthaOS returned HTTP ${resp.status}`);
+      const data = await resp.json();
+      let answer = data.answer || 'No answer returned.';
+      if (data.low_confidence) {
+        answer += '\n\n_⚠️ Low confidence — open the dashboard for full details._';
+      }
+      financeSession.addTurn(userId, query, answer);
+      await reliableSend(userId, answer);
+    } catch (err) {
+      console.error('[Finance] ArthaOS error:', err.message);
+      await reliableSend(userId, `❌ ArthaOS unreachable: ${err.message}`);
+    }
   }
 
   // Communication agent
@@ -477,34 +511,40 @@ async function main() {
     },
 
     onFinance: async (userId, query) => {
+      // /finance — enter finance mode (with optional first question)
+      financeSession.enter(userId); // always start a fresh session on /finance
+
       if (!query) {
         await reliableSend(userId,
-          '💰 *ArthaOS — Personal Finance AI*\n\n' +
-          'Usage: `/finance <question>`\n\n' +
+          '💰 *Finance mode active.*\n\n' +
+          'Ask me anything about your accounts, spending, investments, or alerts.\n' +
+          'I remember the full conversation — no need to repeat context.\n\n' +
           'Examples:\n' +
-          '• /finance What did I spend most on this month?\n' +
-          '• /finance How much did I spend on dining last month?\n' +
-          '• /finance Can I afford a $500 purchase?\n' +
-          '• /finance Show my top 3 expense categories'
+          '• how much did I spend last month?\n' +
+          '• show me all dining transactions\n' +
+          '• compare this month to last\n' +
+          '• what\'s my net worth?\n' +
+          '• any unusual charges?\n\n' +
+          'Send */exit* when done.'
         );
         return;
       }
-      await reliableSend(userId, '💰 _Checking ArthaOS..._');
-      try {
-        const resp = await fetch(`${ARTHAOS_API_URL}/finance`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
-        if (!resp.ok) throw new Error(`ArthaOS returned HTTP ${resp.status}`);
-        const data = await resp.json();
-        let answer = data.answer || 'No answer returned.';
-        if (data.low_confidence) {
-          answer += '\n\n_⚠️ Low confidence — open the dashboard for full details._';
-        }
-        await reliableSend(userId, answer);
-      } catch (err) {
-        await reliableSend(userId, `❌ ArthaOS unreachable: ${err.message}`);
+
+      // /finance <question> — enter mode and answer immediately
+      await _callArthaOS(userId, query);
+    },
+
+    onFinanceFollowUp: async (userId, text) => {
+      // In-session follow-up — no /finance prefix needed
+      await _callArthaOS(userId, text);
+    },
+
+    onFinanceExit: async (userId) => {
+      if (financeSession.isActive(userId)) {
+        financeSession.exit(userId);
+        await reliableSend(userId, '👋 Left finance mode. Send */finance* to start again.');
+      } else {
+        await reliableSend(userId, 'You\'re not in finance mode. Send */finance* to start.');
       }
     },
 
