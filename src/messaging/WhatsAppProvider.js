@@ -8,7 +8,7 @@ const { MessagingLayer, buildMessage } = require('./MessagingLayer');
 const { extractMediaMetadata } = require('../utils/MultimodalHandler');
 
 // Message types that may carry media or text we want to process
-const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document', 'buttons_response', 'list_response']);
+const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document']);
 
 // Simple URL extractor — captures http/https links from free text
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g;
@@ -106,24 +106,6 @@ class WhatsAppProvider extends MessagingLayer {
         }
       }
 
-      // Detect and parse button interaction responses.
-      // buttons_response  → user tapped a quick-reply button
-      // list_response     → user selected a row from a list message
-      let buttonInteraction = null;
-      if (msg.type === 'buttons_response') {
-        buttonInteraction = {
-          type: 'quick_reply',
-          buttonId: msg.selectedButtonId || null,
-          title: msg.body ? msg.body.trim() : null,
-        };
-      } else if (msg.type === 'list_response') {
-        buttonInteraction = {
-          type: 'list',
-          rowId: msg.selectedRowId || null,
-          title: msg.body ? msg.body.trim() : null,
-        };
-      }
-
       const normalized = buildMessage({
         userId,
         text: msg.body ? msg.body.trim() : '',
@@ -131,10 +113,6 @@ class WhatsAppProvider extends MessagingLayer {
         media,
         links,
       });
-
-      // Attach button interaction data so downstream handlers can route
-      // button selections without re-parsing free text.
-      normalized.buttonInteraction = buttonInteraction;
 
       this._dispatchMessage(normalized);
     });

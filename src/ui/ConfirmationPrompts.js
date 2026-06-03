@@ -4,7 +4,7 @@
  * Each helper returns a { type, payload } object compatible with
  * WhatsAppProvider.sendQuickReply() or WhatsAppProvider.sendListMessage().
  *
- * Button ID conventions (used by ButtonResponseHandler for routing):
+ * Button ID conventions:
  *   confirm_yes / confirm_no          — simple yes/no
  *   ccm_confirm / ccm_cancel / ccm_modify — confirm / cancel / modify workflow
  *   choice_<index>                     — generic numbered choice

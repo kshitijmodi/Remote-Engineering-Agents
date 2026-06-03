@@ -12,7 +12,6 @@ const {
   retryCancel,
   choiceList,
 } = require('../ui/ConfirmationPrompts');
-const { ButtonResponseHandler } = require('../messaging/ButtonResponseHandler');
 
 /**
  * CommunicationAgent
@@ -48,16 +47,6 @@ class CommunicationAgent {
     this._handlers = handlers;
     this._classify = classify;
 
-    // Wire button interactions to the appropriate action handlers
-    this._buttonHandler = new ButtonResponseHandler({
-      onConfirm: (userId) => this._handlers.onConfirm?.(userId),
-      onCancel:  (userId) => this._handlers.onCancel?.(userId),
-      onModify:  (userId, hint) => this._handlers.onModify?.(userId, hint),
-      onChoice:  (userId, index, title) => this._handlers.onChoice?.(userId, index, title),
-      onYes:     (userId) => (this._handlers.onYes ?? this._handlers.onConfirm)?.(userId),
-      onNo:      (userId) => (this._handlers.onNo  ?? this._handlers.onCancel)?.(userId),
-      onRetry:   (userId) => this._handlers.onRetry?.(userId),
-    });
   }
 
   /**
@@ -396,10 +385,7 @@ class CommunicationAgent {
       (multimodalSuffix ? ` [+${multimodalSuffix}]` : '')
     );
 
-    // 2. Intercept button interactions before any text routing
-    if (this._buttonHandler.handleMessage(msg)) return;
-
-    // 3. Parse slash commands
+    // 2. Parse slash commands
     if (text && text.startsWith('/')) {
       await this._handleCommand(userId, text);
       return;
