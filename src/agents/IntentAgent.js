@@ -169,6 +169,10 @@ Your reply (one word only):`;
     if (/\b(how|why|what|when|where|who|explain|describe|tell me about|what does|what is|how do)\b/i.test(message)) return true;
     // Coding task keywords suggest TASK intent
     if (/\b(write|create|build|implement|fix|refactor|add|update|edit|modify|change|delete|make|code)\b/i.test(message)) return true;
+    // Financial keywords — never treat finance queries as file requests
+    if (/\b(balance|balances|spend|spending|expense|expenses|invest|investments|portfolio|income|savings|budget|transaction|transactions|bank|credit|debit|account|accounts|finance|financial|money|cash|401k|stocks|fidelity|robinhood|schwab|bilt|plaid|teller|net worth|networth)\b/i.test(message)) return true;
+    // Scheduling/time phrases — "at 4pm", "in 2 hours" etc.
+    if (/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\bin\s+\d+\s*(hour|min|day)/i.test(message)) return true;
     return false;
   }
 }
