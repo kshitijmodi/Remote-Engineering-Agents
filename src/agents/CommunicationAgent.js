@@ -12,7 +12,6 @@ const {
   retryCancel,
   choiceList,
 } = require('../ui/ConfirmationPrompts');
-const { ButtonResponseHandler } = require('../messaging/ButtonResponseHandler');
 
 /**
  * CommunicationAgent
@@ -48,16 +47,6 @@ class CommunicationAgent {
     this._handlers = handlers;
     this._classify = classify;
 
-    // Wire button interactions to the appropriate action handlers
-    this._buttonHandler = new ButtonResponseHandler({
-      onConfirm: (userId) => this._handlers.onConfirm?.(userId),
-      onCancel:  (userId) => this._handlers.onCancel?.(userId),
-      onModify:  (userId, hint) => this._handlers.onModify?.(userId, hint),
-      onChoice:  (userId, index, title) => this._handlers.onChoice?.(userId, index, title),
-      onYes:     (userId) => (this._handlers.onYes ?? this._handlers.onConfirm)?.(userId),
-      onNo:      (userId) => (this._handlers.onNo  ?? this._handlers.onCancel)?.(userId),
-      onRetry:   (userId) => this._handlers.onRetry?.(userId),
-    });
   }
 
   /**
@@ -396,10 +385,7 @@ class CommunicationAgent {
       (multimodalSuffix ? ` [+${multimodalSuffix}]` : '')
     );
 
-    // 2. Intercept button interactions before any text routing
-    if (this._buttonHandler.handleMessage(msg)) return;
-
-    // 3. Parse slash commands
+    // 2. Parse slash commands
     if (text && text.startsWith('/')) {
       await this._handleCommand(userId, text);
       return;
@@ -434,11 +420,12 @@ class CommunicationAgent {
 
     const dispatch = (() => {
       switch (intent) {
-        case 'STATUS':    return this._handlers.onStatus?.(userId);
-        case 'QUESTION':  return this._handlers.onQuery?.(userId, effectiveText, multimodal);
-        case 'PUSH':      return this._handlers.onPush?.(userId, null);
-        case 'FILE_SEND': return this._handlers.onFileSend?.(userId, effectiveText, multimodal);
-        default:          return this._handlers.onTask?.(userId, effectiveText, multimodal);
+        case 'STATUS':         return this._handlers.onStatus?.(userId);
+        case 'QUESTION':       return this._handlers.onQuery?.(userId, effectiveText, multimodal);
+        case 'PUSH':           return this._handlers.onPush?.(userId, null);
+        case 'FILE_SEND':      return this._handlers.onFileSend?.(userId, effectiveText, multimodal);
+        case 'FINANCE_SESSION': return this._handlers.onFinanceFollowUp?.(userId, effectiveText);
+        default:               return this._handlers.onTask?.(userId, effectiveText, multimodal);
       }
     })();
     Promise.resolve(dispatch).catch((err) => {
@@ -556,9 +543,25 @@ class CommunicationAgent {
         this._handlers.onFinance?.(userId, arg);
         break;
 
+      case '/exit':
+        this._handlers.onFinanceExit?.(userId);
+        break;
+
       case '/help':
         await this.send(userId,
           `*Available Commands:*\n\n` +
+          `*💰 Finance (ArthaOS)*\n` +
+          `/finance — enter finance mode (start a conversation)\n` +
+          `/finance <question> — enter finance mode with a first question\n` +
+          `Once in finance mode, just type naturally — no /finance prefix needed.\n` +
+          `Context is remembered for the whole session.\n` +
+          `/exit — leave finance mode and return to normal REA\n\n` +
+          `Finance examples:\n` +
+          `• /finance  ← enters mode\n` +
+          `• how much did I spend on dining last month?\n` +
+          `• show me all those transactions  ← follows up on prior answer\n` +
+          `• compare this month to last\n` +
+          `• /exit  ← back to REA\n\n` +
           `*Workspace*\n` +
           `/init "<local-path>" — set a local folder as active workspace\n` +
           `/connect <repo-url> — clone a GitHub repo and set as active workspace\n` +
@@ -575,9 +578,6 @@ class CommunicationAgent {
           `/cancel — cancel the running task\n` +
           `/resume — extend budget by 10 and continue a paused task\n` +
           `/logs — show recent task logs\n\n` +
-          `*Finance (ArthaOS)*\n` +
-          `/finance <question> — ask your personal finance AI\n` +
-          `Example: /finance What did I spend most on this month?\n\n` +
           `*Bot Control*\n` +
           `/restart — gracefully restart the bot (requires pm2)\n` +
           `/stop — gracefully stop the bot\n\n` +

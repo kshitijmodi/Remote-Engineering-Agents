@@ -3,11 +3,12 @@ const { buildQuickReply, buildListMessage } = require('../ui/WhatsAppButtons');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { MessagingLayer, buildMessage } = require('./MessagingLayer');
 const { extractMediaMetadata } = require('../utils/MultimodalHandler');
 
 // Message types that may carry media or text we want to process
-const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document', 'buttons_response', 'list_response']);
+const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document']);
 
 // Simple URL extractor — captures http/https links from free text
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g;
@@ -24,6 +25,14 @@ const AUTH_PATH = path.resolve('./.wwebjs_auth_business');
 class WhatsAppProvider extends MessagingLayer {
   constructor() {
     super();
+    // Kill any leftover Chromium from a previous crashed run before starting
+    try { execSync('pkill -9 -f puppeteer/chrome 2>/dev/null || true', { stdio: 'ignore' }); } catch {}
+    const sessionDir = path.join(AUTH_PATH, 'session');
+    if (fs.existsSync(sessionDir)) {
+      ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
+        try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
+      });
+    }
     this._client = new Client({
       authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
       puppeteer: {
@@ -97,24 +106,6 @@ class WhatsAppProvider extends MessagingLayer {
         }
       }
 
-      // Detect and parse button interaction responses.
-      // buttons_response  → user tapped a quick-reply button
-      // list_response     → user selected a row from a list message
-      let buttonInteraction = null;
-      if (msg.type === 'buttons_response') {
-        buttonInteraction = {
-          type: 'quick_reply',
-          buttonId: msg.selectedButtonId || null,
-          title: msg.body ? msg.body.trim() : null,
-        };
-      } else if (msg.type === 'list_response') {
-        buttonInteraction = {
-          type: 'list',
-          rowId: msg.selectedRowId || null,
-          title: msg.body ? msg.body.trim() : null,
-        };
-      }
-
       const normalized = buildMessage({
         userId,
         text: msg.body ? msg.body.trim() : '',
@@ -122,10 +113,6 @@ class WhatsAppProvider extends MessagingLayer {
         media,
         links,
       });
-
-      // Attach button interaction data so downstream handlers can route
-      // button selections without re-parsing free text.
-      normalized.buttonInteraction = buttonInteraction;
 
       this._dispatchMessage(normalized);
     });

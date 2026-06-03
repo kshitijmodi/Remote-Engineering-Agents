@@ -1,5 +1,3 @@
-const { ButtonResponseHandler } = require('./ButtonResponseHandler');
-
 /**
  * MessagingLayer — abstract base class.
  *
@@ -9,9 +7,6 @@ const { ButtonResponseHandler } = require('./ButtonResponseHandler');
  */
 class MessagingLayer {
   constructor() {
-    /** @type {ButtonResponseHandler|null} */
-    this._buttonResponseHandler = null;
-
     /** @type {function(Message): void|null} */
     this._messageCallback = null;
 
@@ -57,21 +52,6 @@ class MessagingLayer {
    */
   onMessage(callback) {
     throw new Error('onMessage() not implemented');
-  }
-
-  /**
-   * Register a ButtonResponseHandler to intercept button interactions before
-   * they reach the normal text message callback. When a message arrives with
-   * a buttonInteraction field and the handler recognises the button ID, the
-   * message is consumed and the text callback is NOT called.
-   *
-   * @param {ButtonResponseHandler} handler
-   */
-  registerButtonResponseHandler(handler) {
-    if (!(handler instanceof ButtonResponseHandler)) {
-      throw new TypeError('handler must be an instance of ButtonResponseHandler');
-    }
-    this._buttonResponseHandler = handler;
   }
 
   /**
@@ -142,11 +122,6 @@ class MessagingLayer {
    * @param {Message} msg - Normalized message from buildMessage()
    */
   _dispatchMessage(msg) {
-    if (msg.buttonInteraction && this._buttonResponseHandler) {
-      const handled = this._buttonResponseHandler.handleMessage(msg);
-      if (handled) return;
-    }
-
     // Enrich the message with file context from the state manager so that
     // downstream agents (FileAgent, IntentAgent) can resolve vague file
     // references without needing a separate context lookup.
@@ -293,4 +268,4 @@ function buildMessage({ userId, text, receivedAt, media, links, buttonInteractio
   };
 }
 
-module.exports = { MessagingLayer, parseConfirmationCommand, buildMessage, ButtonResponseHandler };
+module.exports = { MessagingLayer, parseConfirmationCommand, buildMessage };
