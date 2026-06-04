@@ -87,7 +87,6 @@ class WhatsAppProvider extends MessagingLayer {
     // fromMe=false means someone else sent this — no self-loop risk.
     // Using async so we can await media downloads before invoking the callback.
     this._client.on('message', async (msg) => {
-      console.log(`[DEBUG] msg received — type:${msg.type} fromMe:${msg.fromMe} from:${msg.from} body:${(msg.body||'').slice(0,30)}`);
       if (!this._messageCallback && !this._buttonResponseHandler) return;
       if (!SUPPORTED_MSG_TYPES.has(msg.type)) return;
       if (msg.fromMe) return;
