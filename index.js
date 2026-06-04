@@ -666,7 +666,7 @@ async function main() {
 
   // ── Disconnect / reconnect handling ───────────────────────────────────────
   messaging._client?.on('disconnected', async (reason) => {
-    console.warn('[WhatsApp] Disconnected:', reason, '— will attempt reconnect');
+    console.warn('[WhatsApp] Disconnected:', reason);
     // Pause all active tasks
     for (const userId of ALLOWED_NUMBERS) {
       const task = orchestrator.getActiveTask(userId);
@@ -676,7 +676,13 @@ async function main() {
         logging.log(task.taskId, 'WARN', 'Task paused due to WhatsApp disconnect');
       }
     }
-    // Attempt reconnect after 5s
+    // LOGOUT means WhatsApp explicitly killed the session — reconnecting won't work,
+    // need to re-scan QR. Exit so PM2 restarts cleanly and shows a new QR.
+    if (reason === 'LOGOUT') {
+      console.warn('[WhatsApp] Session logged out — exiting for clean restart. Re-scan QR after restart.');
+      process.exit(1);
+    }
+    // For other disconnects, attempt reconnect after 15s
     setTimeout(async () => {
       try {
         console.log('[WhatsApp] Attempting reconnect...');
@@ -684,7 +690,7 @@ async function main() {
       } catch (err) {
         console.error('[WhatsApp] Reconnect failed:', err.message);
       }
-    }, 5000);
+    }, 15000);
   });
 
   messaging._client?.on('ready', async () => {
