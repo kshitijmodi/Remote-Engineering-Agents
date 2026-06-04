@@ -607,7 +607,9 @@ async function main() {
         const payload = JSON.parse(body);
         const message = payload.message || String(payload);
         console.log('[ArthaOS] Alert received:', message.slice(0, 100));
-        for (const userId of ALLOWED_NUMBERS) {
+        // Send only to @c.us numbers to avoid duplicates (@lid is same user, different format)
+        const alertRecipients = ALLOWED_NUMBERS.filter(n => n.endsWith('@c.us'));
+        for (const userId of alertRecipients) {
           await reliableSend(userId, `🚨 *ArthaOS Alert*\n\n${message}`);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
