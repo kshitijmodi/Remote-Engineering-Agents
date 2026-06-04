@@ -49,11 +49,6 @@ class WhatsAppProvider extends MessagingLayer {
         ],
       },
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      webVersion: '2.3000.1015901725',
-      webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1015901725.html',
-      },
     });
     this._messageCallback = null;
     this._connected = false;
