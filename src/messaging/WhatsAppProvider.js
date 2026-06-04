@@ -41,11 +41,10 @@ class WhatsAppProvider extends MessagingLayer {
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-gpu',
-          '--no-first-run',
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
-          '--no-zygote',
-          '--single-process',
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1280,800',
         ],
       },
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -65,8 +64,17 @@ class WhatsAppProvider extends MessagingLayer {
       }
     });
 
-    this._client.on('ready', () => {
+    this._client.on('ready', async () => {
       this._connected = true;
+      // Remove webdriver flag so WhatsApp can't detect headless automation
+      try {
+        const page = await this._client.pupPage;
+        if (page) {
+          await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          });
+        }
+      } catch {}
       console.log('[WhatsApp] Connected and ready.');
     });
 
