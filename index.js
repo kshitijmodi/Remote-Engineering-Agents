@@ -49,7 +49,7 @@ async function main() {
   const messaging = new WhatsAppProvider();
   const executor  = new ClaudeCodeExecutor({
     maxInvocations: 60,
-    timeoutMs: 3_600_000,  // 60 min — complex coding tasks regularly exceed the old 5 min default
+    timeoutMs: 900_000,  // 15 min per invocation — enough for complex steps; fails fast if Claude hangs
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
   });
@@ -607,7 +607,9 @@ async function main() {
         const payload = JSON.parse(body);
         const message = payload.message || String(payload);
         console.log('[ArthaOS] Alert received:', message.slice(0, 100));
-        for (const userId of ALLOWED_NUMBERS) {
+        // Send only to @c.us numbers to avoid duplicates (@lid is same user, different format)
+        const alertRecipients = ALLOWED_NUMBERS.filter(n => n.endsWith('@c.us'));
+        for (const userId of alertRecipients) {
           await reliableSend(userId, `🚨 *ArthaOS Alert*\n\n${message}`);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -664,7 +666,7 @@ async function main() {
 
   // ── Disconnect / reconnect handling ───────────────────────────────────────
   messaging._client?.on('disconnected', async (reason) => {
-    console.warn('[WhatsApp] Disconnected:', reason, '— will attempt reconnect');
+    console.warn('[WhatsApp] Disconnected:', reason);
     // Pause all active tasks
     for (const userId of ALLOWED_NUMBERS) {
       const task = orchestrator.getActiveTask(userId);
@@ -674,7 +676,13 @@ async function main() {
         logging.log(task.taskId, 'WARN', 'Task paused due to WhatsApp disconnect');
       }
     }
-    // Attempt reconnect after 5s
+    // LOGOUT means WhatsApp explicitly killed the session — reconnecting won't work,
+    // need to re-scan QR. Exit so PM2 restarts cleanly and shows a new QR.
+    if (reason === 'LOGOUT') {
+      console.warn('[WhatsApp] Session logged out — exiting for clean restart. Re-scan QR after restart.');
+      process.exit(1);
+    }
+    // For other disconnects, attempt reconnect after 15s
     setTimeout(async () => {
       try {
         console.log('[WhatsApp] Attempting reconnect...');
@@ -682,7 +690,7 @@ async function main() {
       } catch (err) {
         console.error('[WhatsApp] Reconnect failed:', err.message);
       }
-    }, 5000);
+    }, 15000);
   });
 
   messaging._client?.on('ready', async () => {

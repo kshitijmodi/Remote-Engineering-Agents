@@ -232,7 +232,10 @@ class OrchestratorAgent extends EventEmitter {
 
     // If this is a brand-new task start but saved state exists, jump to the persisted stage
     // instead of re-running planning. Clears the saved state so subsequent calls don't re-apply it.
-    if (task.status === STATES.QUEUED && this._savedState?.currentAgentIndex > 0) {
+    // Only resume if the checkpoint belongs to this exact task — stale checkpoints from previous
+    // tasks must not skip planning/confirmation for a new task.
+    if (task.status === STATES.QUEUED && this._savedState?.currentAgentIndex > 0 &&
+        this._savedState?.taskId === task.taskId) {
       const resumeStage = INDEX_TO_STAGE[this._savedState.currentAgentIndex];
       if (resumeStage) {
         logging.log(task.taskId, 'INFO', `Resuming from saved state at stage "${resumeStage}" (index ${this._savedState.currentAgentIndex})`);
@@ -357,6 +360,9 @@ class OrchestratorAgent extends EventEmitter {
 
       task.planSteps = result.steps;
       logging.log(task.taskId, 'INFO', `Plan produced ${result.steps.length} steps`, { steps: result.steps.map(s => s.description) });
+
+      // If the task was cancelled while planning was running, bail out before transitioning
+      if (task.status === STATES.CANCELLED) return;
 
       // Transition to awaiting_confirmation (records planningEnd timing)
       this._transitionStage(task, STATES.AWAITING_CONFIRMATION);

@@ -41,13 +41,13 @@ class WhatsAppProvider extends MessagingLayer {
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-gpu',
-          '--no-first-run',
-          '--disable-extensions',
           '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1280,800',
         ],
       },
-      // Spoof a real Chrome user agent so WhatsApp doesn't block the headless browser
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     });
     this._messageCallback = null;
     this._connected = false;
@@ -64,8 +64,17 @@ class WhatsAppProvider extends MessagingLayer {
       }
     });
 
-    this._client.on('ready', () => {
+    this._client.on('ready', async () => {
       this._connected = true;
+      // Remove webdriver flag so WhatsApp can't detect headless automation
+      try {
+        const page = await this._client.pupPage;
+        if (page) {
+          await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          });
+        }
+      } catch {}
       console.log('[WhatsApp] Connected and ready.');
     });
 
@@ -78,6 +87,7 @@ class WhatsAppProvider extends MessagingLayer {
     // fromMe=false means someone else sent this — no self-loop risk.
     // Using async so we can await media downloads before invoking the callback.
     this._client.on('message', async (msg) => {
+      if (msg.from === 'status@broadcast') return; // ignore WhatsApp status updates
       if (!this._messageCallback && !this._buttonResponseHandler) return;
       if (!SUPPORTED_MSG_TYPES.has(msg.type)) return;
       if (msg.fromMe) return;
