@@ -40,12 +40,14 @@ Rules:
 - Each step should be a single, focused action
 - Maximum 8 steps
 - Output ONLY the numbered list, no other text
+- Do NOT include steps that start/run the app, open a browser, start a dev server, or do manual UI testing — the environment is a headless server with no display
+- Verification steps must be code-only: read files to confirm changes are correct, run existing unit/integration tests if a test runner exists, or verify imports/exports are consistent
 
 Example format:
 1. Add exportToCsv() function to src/utils/export.js
 2. Import the function in src/components/Table.js
 3. Add export button to the Table component
-4. Write tests in tests/export.test.js`;
+4. Verify the changes by reading the modified files and checking for any import errors`;
 
     const result = await this._executor.run(prompt, repoPath, {
       allowedTools: ['Read', 'Glob', 'Grep'],

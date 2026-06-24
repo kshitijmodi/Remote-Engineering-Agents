@@ -49,7 +49,7 @@ async function main() {
   const messaging = new WhatsAppProvider();
   const executor  = new ClaudeCodeExecutor({
     maxInvocations: 60,
-    timeoutMs: 3_600_000,  // 60 min — complex coding tasks regularly exceed the old 5 min default
+    timeoutMs: 900_000,  // 15 min per invocation — enough for complex steps; fails fast if Claude hangs
     // Block .env files from Claude Code tool access
     disallowedTools: ['Read(.env)', 'Edit(.env)', 'Write(.env)'],
   });
