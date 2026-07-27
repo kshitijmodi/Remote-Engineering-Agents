@@ -83,6 +83,34 @@ async function main() {
   // Forward-declared so orchestrator notify can use it
   let commAgent;
 
+  // ── Detached-frame self-heal ──────────────────────────────────────────────
+  // When Puppeteer's Chrome frame is destroyed (GCP memory pressure), every
+  // send fails with "Attempted to use detached Frame". The whatsapp-web.js
+  // Client still reports connected=true, so the heartbeat never catches it.
+  // We detect the error here and reinitialize Chrome in-place.
+  let _healInProgress = false;
+  async function _healDetachedFrame() {
+    if (_healInProgress) return;
+    _healInProgress = true;
+    console.warn('[WhatsApp] Detached frame detected — reinitializing Chrome...');
+    messaging._connected = false;
+    try {
+      await messaging._client.destroy();
+    } catch { /* ignore — frame is already dead */ }
+    // Brief pause so OS can reclaim file handles before reinit
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      await messaging._client.initialize();
+      console.log('[WhatsApp] Reinitialized successfully.');
+    } catch (err) {
+      console.error('[WhatsApp] Reinit failed:', err.message);
+      // PM2 will restart the process; session data is persisted so no QR needed
+      process.exit(1);
+    } finally {
+      _healInProgress = false;
+    }
+  }
+
   // ── Reliable send with retry ──────────────────────────────────────────────
   async function reliableSend(userId, text) {
     console.log(`[Send] → ${userId}: "${text.slice(0, 80)}"`);
@@ -91,6 +119,13 @@ async function main() {
         await messaging.sendMessage(userId, text);
         return;
       } catch (err) {
+        const isDetachedFrame = err.message && err.message.includes('detached Frame');
+        if (isDetachedFrame) {
+          console.warn(`[Send] Detached frame on attempt ${attempt} — triggering self-heal`);
+          _healDetachedFrame().catch(() => {});
+          // Don't retry further — Chrome is dead; message will be lost but session will recover
+          return;
+        }
         if (attempt === MSG_RETRY_ATTEMPTS) {
           console.error(`[Send] Failed after ${MSG_RETRY_ATTEMPTS} attempts:`, err.message);
         } else {
@@ -653,14 +688,26 @@ async function main() {
   }
 
   // ── Heartbeat ─────────────────────────────────────────────────────────────
+  // Every 60s: verify the Puppeteer page is actually alive by evaluating a
+  // trivial JS expression. A dead/detached frame throws — we self-heal immediately
+  // rather than waiting for the next send failure.
   let lastHeartbeat = Date.now();
-  setInterval(() => {
+  setInterval(async () => {
     const status = messaging.getStatus();
     if (!status.connected) {
       console.warn('[Heartbeat] WhatsApp disconnected — pausing active tasks');
-      // Tasks stay in their current state; they'll resume on reconnect
-    } else {
+      return;
+    }
+    // Probe the Puppeteer page to catch detached frames before the next send
+    try {
+      const page = messaging._client.pupPage;
+      if (page) await page.evaluate(() => true);
       lastHeartbeat = Date.now();
+    } catch (err) {
+      if (err.message && (err.message.includes('detached') || err.message.includes('Target closed') || err.message.includes('Session closed'))) {
+        console.warn('[Heartbeat] Puppeteer page probe failed — triggering self-heal:', err.message);
+        _healDetachedFrame().catch(() => {});
+      }
     }
   }, HEARTBEAT_INTERVAL_MS);
 
