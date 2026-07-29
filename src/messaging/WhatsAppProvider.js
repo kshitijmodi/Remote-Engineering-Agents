@@ -1,140 +1,122 @@
-const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
-const { buildQuickReply, buildListMessage } = require('../ui/WhatsAppButtons');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { MessagingLayer, buildMessage } = require('./MessagingLayer');
-const { extractMediaMetadata } = require('../utils/MultimodalHandler');
 
-// Message types that may carry media or text we want to process
-const SUPPORTED_MSG_TYPES = new Set(['chat', 'image', 'document']);
-
-// Simple URL extractor — captures http/https links from free text
-const URL_REGEX = /https?:\/\/[^\s<>"']+/g;
-
-const AUTH_PATH = path.resolve('./.wwebjs_auth_business');
+const AUTH_PATH = path.resolve('./.baileys_auth_business');
 
 /**
- * WhatsApp implementation of MessagingLayer via whatsapp-web.js.
- *
- * On first run, prints a QR code to the terminal — scan it with WhatsApp
- * to authenticate. Session is persisted locally so subsequent restarts
- * don't need a new QR scan.
+ * WhatsApp implementation of MessagingLayer via Baileys.
+ * Drop-in replacement for the whatsapp-web.js WhatsAppProvider.
+ * No headless Chrome — connects via WhatsApp's native WebSocket protocol.
  */
 class WhatsAppProvider extends MessagingLayer {
   constructor() {
     super();
-    // Kill any leftover Chromium from a previous crashed run before starting
-    try { execSync('pkill -9 -f puppeteer/chrome 2>/dev/null || true', { stdio: 'ignore' }); } catch {}
-    const sessionDir = path.join(AUTH_PATH, 'session');
-    if (fs.existsSync(sessionDir)) {
-      ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
-        try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
-      });
-    }
-    this._client = new Client({
-      authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
-      puppeteer: {
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-gpu',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-blink-features=AutomationControlled',
-          '--window-size=1280,800',
-        ],
-      },
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    });
+    this._sock = null;
     this._messageCallback = null;
     this._connected = false;
     this._qrShown = false;
-    this._setupListeners();
-  }
-
-  _setupListeners() {
-    this._client.on('qr', (qr) => {
-      if (!this._qrShown) {
-        console.log('\nScan this QR code with WhatsApp to authenticate:\n');
-        qrcode.generate(qr, { small: true });
-        this._qrShown = true;
-      }
-    });
-
-    this._client.on('ready', async () => {
-      this._connected = true;
-      // Remove webdriver flag so WhatsApp can't detect headless automation
-      try {
-        const page = await this._client.pupPage;
-        if (page) {
-          await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-          });
-        }
-      } catch {}
-      console.log('[WhatsApp] Connected and ready.');
-    });
-
-    this._client.on('disconnected', (reason) => {
-      this._connected = false;
-      console.warn('[WhatsApp] Disconnected:', reason);
-    });
-
-    // Business number setup: incoming messages from other people.
-    // fromMe=false means someone else sent this — no self-loop risk.
-    // Using async so we can await media downloads before invoking the callback.
-    this._client.on('message', async (msg) => {
-      if (msg.from === 'status@broadcast') return; // ignore WhatsApp status updates
-      if (!this._messageCallback && !this._buttonResponseHandler) return;
-      if (!SUPPORTED_MSG_TYPES.has(msg.type)) return;
-      if (msg.fromMe) return;
-
-      // Use the @c.us ID for sending replies if available, fall back to msg.from
-      const userId = msg.author || msg.from;
-
-      // Extract any URLs present in the message text and wrap as LinkObjects
-      const links = msg.body
-        ? (msg.body.match(URL_REGEX) || []).map((url) => ({ url, title: null, description: null }))
-        : [];
-
-      // Download media attachment when the message carries one (image, PDF, etc.)
-      // Each entry is enriched with normalised metadata via MultimodalHandler so
-      // downstream agents receive a consistent {type, mimeType, filename, filesize, data} shape.
-      let media = [];
-      if (msg.hasMedia) {
-        try {
-          const attachment = await msg.downloadMedia();
-          if (attachment) {
-            const metadata = extractMediaMetadata(attachment);
-            media = [metadata];
-          }
-        } catch (err) {
-          console.warn('[WhatsApp] Failed to download media:', err.message);
-        }
-      }
-
-      const normalized = buildMessage({
-        userId,
-        text: msg.body ? msg.body.trim() : '',
-        receivedAt: new Date(msg.timestamp * 1000),
-        media,
-        links,
-      });
-
-      this._dispatchMessage(normalized);
-    });
   }
 
   async connect() {
     console.log('[WhatsApp] Initializing...');
-    await this._client.initialize();
+    await this._initSocket();
+  }
+
+  async _initSocket() {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
+    const { version } = await fetchLatestBaileysVersion();
+
+    this._sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: require('pino')({ level: 'silent' }),
+      browser: ['ArthaOS', 'Chrome', '122.0.0'],
+      connectTimeoutMs: 60_000,
+      keepAliveIntervalMs: 25_000,
+      retryRequestDelayMs: 2000,
+    });
+
+    this._sock.ev.on('creds.update', saveCreds);
+
+    this._sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        if (!this._qrShown) {
+          console.log('\nScan this QR code with WhatsApp to authenticate:\n');
+          qrcode.generate(qr, { small: true });
+          this._qrShown = true;
+        }
+      }
+
+      if (connection === 'open') {
+        this._connected = true;
+        this._qrShown = false;
+        console.log('[WhatsApp] Connected and ready.');
+      }
+
+      if (connection === 'close') {
+        this._connected = false;
+        const statusCode = lastDisconnect?.error instanceof Boom
+          ? lastDisconnect.error.output?.statusCode
+          : null;
+        const reason = DisconnectReason[statusCode] || statusCode;
+        console.warn('[WhatsApp] Disconnected:', reason);
+
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        if (!shouldReconnect) {
+          console.warn('[WhatsApp] Session logged out — clearing auth and exiting for QR re-scan.');
+          try { fs.rmSync(AUTH_PATH, { recursive: true, force: true }); } catch {}
+          process.exit(1);
+        }
+
+        // Reconnect after delay
+        const delay = statusCode === DisconnectReason.restartRequired ? 2000 : 15000;
+        console.log(`[WhatsApp] Reconnecting in ${delay / 1000}s...`);
+        setTimeout(() => this._initSocket(), delay);
+      }
+    });
+
+    this._sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+
+      for (const msg of messages) {
+        if (msg.key.fromMe) continue;
+        if (msg.key.remoteJid === 'status@broadcast') continue;
+
+        const userId = msg.key.remoteJid;
+        const text = msg.message?.conversation
+          || msg.message?.extendedTextMessage?.text
+          || msg.message?.imageMessage?.caption
+          || msg.message?.documentMessage?.caption
+          || '';
+
+        if (!text.trim()) continue;
+
+        const normalized = buildMessage({
+          userId,
+          text: text.trim(),
+          receivedAt: new Date((msg.messageTimestamp ?? Date.now() / 1000) * 1000),
+          media: [],
+          links: [],
+        });
+
+        this._dispatchMessage(normalized);
+      }
+    });
   }
 
   async disconnect() {
-    await this._client.destroy();
+    if (this._sock) {
+      await this._sock.logout().catch(() => {});
+      this._sock.end();
+    }
     this._connected = false;
     console.log('[WhatsApp] Disconnected.');
   }
@@ -143,156 +125,71 @@ class WhatsAppProvider extends MessagingLayer {
     this._messageCallback = callback;
   }
 
-  /**
-   * @param {string} userId - WhatsApp chat ID (e.g. "447911123456@c.us")
-   * @param {string} text
-   */
   async sendMessage(userId, text) {
-    if (!this._connected) {
+    if (!this._connected || !this._sock) {
       throw new Error('[WhatsApp] Cannot send — not connected');
     }
-    await this._client.sendMessage(userId, text);
+    await this._sock.sendMessage(userId, { text });
   }
 
-  /**
-   * Send a quick-reply button message (up to 3 tappable buttons).
-   *
-   * @param {string} userId - WhatsApp chat ID (e.g. "447911123456@c.us")
-   * @param {{ type: 'quick_reply', payload: object }} quickReply
-   *   Payload produced by buildQuickReply() from src/ui/WhatsAppButtons.js
-   */
+  // Baileys doesn't support interactive buttons/lists on personal WhatsApp
+  // — fall back to plain text for these
   async sendQuickReply(userId, quickReply) {
-    if (!this._connected) {
-      throw new Error('[WhatsApp] Cannot send — not connected');
-    }
     const { payload } = quickReply;
-    const buttons = payload.action.buttons.map((btn) => ({
-      id:   btn.reply.id,
-      body: btn.reply.title,
-    }));
-    const title  = payload.header ? payload.header.text : '';
-    const footer = payload.footer ? payload.footer.text : '';
-    const msg = new Buttons(payload.body.text, buttons, title, footer);
-    await this._client.sendMessage(userId, msg);
+    const buttons = payload.action.buttons.map(b => `• ${b.reply.title}`).join('\n');
+    const text = `${payload.body.text}\n\n${buttons}`;
+    await this.sendMessage(userId, text);
   }
 
-  /**
-   * Send a list message (sectioned menu with a list-picker button).
-   *
-   * @param {string} userId - WhatsApp chat ID (e.g. "447911123456@c.us")
-   * @param {{ type: 'list', payload: object }} listMessage
-   *   Payload produced by buildListMessage() from src/ui/WhatsAppButtons.js
-   */
   async sendListMessage(userId, listMessage) {
-    if (!this._connected) {
-      throw new Error('[WhatsApp] Cannot send — not connected');
-    }
     const { payload } = listMessage;
-    const title  = payload.header ? payload.header.text : '';
-    const footer = payload.footer ? payload.footer.text : '';
-    const msg = new List(
-      payload.body.text,
-      payload.action.button,
-      payload.action.sections,
-      title,
-      footer,
-    );
-    await this._client.sendMessage(userId, msg);
+    const items = payload.action.sections
+      .flatMap(s => s.rows.map(r => `• ${r.title}`))
+      .join('\n');
+    const text = `${payload.body.text}\n\n${items}`;
+    await this.sendMessage(userId, text);
   }
 
-  /**
-   * Send a file as a document attachment.
-   *
-   * Implements the MessagingLayer base-class interface:
-   *   sendDocument(userId, attachment)
-   * where attachment = { mimeType, data, filename, caption }
-   *
-   * @param {string} userId      - WhatsApp chat ID (e.g. "447911123456@c.us")
-   * @param {object} attachment  - File attachment payload
-   * @param {string} attachment.mimeType - MIME type (e.g. "application/pdf")
-   * @param {string} attachment.data     - Base-64 encoded file contents
-   * @param {string} attachment.filename - File name shown to the recipient
-   * @param {string} [attachment.caption] - Optional caption
-   */
   async sendDocument(userId, attachment) {
-    if (!this._connected) {
+    if (!this._connected || !this._sock) {
       throw new Error('[WhatsApp] Cannot send — not connected');
     }
     const { mimeType, data, filename, caption = '' } = attachment;
-    const media = new MessageMedia(mimeType, data, filename);
-    await this._client.sendMessage(userId, media, { caption, sendMediaAsDocument: true });
+    const buffer = Buffer.from(data, 'base64');
+    await this._sock.sendMessage(userId, {
+      document: buffer,
+      mimetype: mimeType,
+      fileName: filename,
+      caption,
+    });
   }
 
-  /**
-   * Send a file attachment via WhatsApp, auto-detecting MIME type from the extension.
-   *
-   * @param {string} to       - WhatsApp chat ID (e.g. "447911123456@c.us")
-   * @param {string} filePath - Absolute path to the file on disk
-   */
   async sendFileAttachment(to, filePath) {
-    if (!this._connected) {
+    if (!this._connected || !this._sock) {
       throw new Error('[WhatsApp] Cannot send — not connected');
     }
-    // Validate file existence, type, and size before reading
-    let stat;
-    try {
-      stat = fs.statSync(filePath);
-    } catch (err) {
-      if (err.code === 'EACCES') {
-        throw new Error(`[WhatsApp] Access denied: ${filePath}`);
-      }
-      throw new Error(`[WhatsApp] File not found: ${filePath}`);
-    }
-
-    if (!stat.isFile()) {
-      throw new Error(`[WhatsApp] Path is not a file: ${filePath}`);
-    }
-
-    // WhatsApp document uploads are capped at 64 MB
-    const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
-    if (stat.size > MAX_ATTACHMENT_BYTES) {
-      const sizeMB  = (stat.size / (1024 * 1024)).toFixed(2);
-      const limitMB = (MAX_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0);
-      throw new Error(`[WhatsApp] File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit`);
-    }
-
     const filename = path.basename(filePath);
     const ext = path.extname(filename).toLowerCase();
     const MIME_MAP = {
-      '.pdf':  'application/pdf',
-      '.doc':  'application/msword',
+      '.pdf': 'application/pdf', '.doc': 'application/msword',
       '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls':  'application/vnd.ms-excel',
+      '.xls': 'application/vnd.ms-excel',
       '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.txt':  'text/plain',
-      '.csv':  'text/csv',
-      '.png':  'image/png',
-      '.jpg':  'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif':  'image/gif',
-      '.zip':  'application/zip',
-      '.json': 'application/json',
+      '.txt': 'text/plain', '.csv': 'text/csv',
+      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif', '.zip': 'application/zip', '.json': 'application/json',
     };
     const mimeType = MIME_MAP[ext] || 'application/octet-stream';
-    let fileData;
-    try {
-      fileData = fs.readFileSync(filePath);
-    } catch (err) {
-      if (err.code === 'EACCES') {
-        throw new Error(`[WhatsApp] Access denied: cannot read file ${filePath}`);
-      }
-      throw err;
-    }
-    const base64Data = fileData.toString('base64');
-    const media = new MessageMedia(mimeType, base64Data, filename);
-    await this._client.sendMessage(to, media, { sendMediaAsDocument: true });
+    const buffer = fs.readFileSync(filePath);
+    await this._sock.sendMessage(to, {
+      document: buffer,
+      mimetype: mimeType,
+      fileName: filename,
+    });
   }
 
   getStatus() {
-    return {
-      connected: this._connected,
-      provider: 'whatsapp',
-    };
+    return { connected: this._connected, provider: 'whatsapp-baileys' };
   }
 }
 
