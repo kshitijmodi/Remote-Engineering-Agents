@@ -4,7 +4,6 @@ const {
   formatStepProgress,
   formatCompletionRecap,
 } = require('../utils/StatusFormatter');
-const { MessageMedia } = require('whatsapp-web.js');
 const {
   confirmCancelModify,
   confirmCancel,
@@ -104,19 +103,6 @@ class CommunicationAgent {
     if (typeof this._messaging.sendMediaMessage === 'function') {
       await this._messaging.sendMediaMessage(userId, mediaItem);
       return;
-    }
-
-    // whatsapp-web.js path — build a MessageMedia and send it directly via
-    // the underlying client if it is accessible on the provider.
-    const client = this._messaging._client;
-    if (client && typeof client.sendMessage === 'function' && data) {
-      try {
-        const media = new MessageMedia(mimeType, data, filename || null);
-        await client.sendMessage(userId, media, caption ? { caption } : {});
-        return;
-      } catch (err) {
-        console.warn('[CommunicationAgent] sendMedia via _client failed:', err.message);
-      }
     }
 
     // Last-resort: send a text description so the user knows media was processed
