@@ -187,7 +187,11 @@ async function main() {
 
     // If the user is in an active finance session, route all non-slash messages
     // to the finance follow-up handler (slash commands are handled separately).
-    if (financeSession.isActive(userId)) {
+    // Check both userId formats (@c.us and @lid) — same person, different formats.
+    const altUserId = userId.endsWith('@lid')
+      ? ALLOWED_NUMBERS.find(n => n.endsWith('@c.us'))
+      : ALLOWED_NUMBERS.find(n => n.endsWith('@lid'));
+    if (financeSession.isActive(userId) || (altUserId && financeSession.isActive(altUserId))) {
       return 'FINANCE_SESSION';
     }
     let contextBlock = '';
@@ -575,8 +579,14 @@ async function main() {
     },
 
     onFinanceExit: async (userId) => {
-      if (financeSession.isActive(userId)) {
-        financeSession.exit(userId);
+      // Exit both userId formats — @c.us and @lid refer to the same person
+      const altId = userId.endsWith('@lid')
+        ? ALLOWED_NUMBERS.find(n => n.endsWith('@c.us'))
+        : ALLOWED_NUMBERS.find(n => n.endsWith('@lid'));
+      const wasActive = financeSession.isActive(userId) || (altId && financeSession.isActive(altId));
+      financeSession.exit(userId);
+      if (altId) financeSession.exit(altId);
+      if (wasActive) {
         await reliableSend(userId, '👋 Left finance mode. Send */finance* to start again.');
       } else {
         await reliableSend(userId, 'You\'re not in finance mode. Send */finance* to start.');
