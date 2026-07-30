@@ -276,7 +276,7 @@ async function main() {
           : undefined;
 
         const result = await executor.run(contextBlock + question, target, {
-          allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
+          allowedTools: ['Read', 'Glob', 'Grep'],
           media,
         });
         const answer = result.output || 'No response.';
