@@ -208,7 +208,9 @@ async function main() {
     if (task && !['pr_created', 'failed', 'cancelled'].includes(task.status)) {
       activeStatus = task.status;
     }
-    return intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
+    const classified = await intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
+    console.log(`[Intent] classified=${classified} hasActiveRepo=${hasActiveRepo} activeStatus=${activeStatus}`);
+    return classified;
   }
 
   // ── ArthaOS finance query helper ──────────────────────────────────────────
