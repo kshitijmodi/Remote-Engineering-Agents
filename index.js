@@ -191,7 +191,9 @@ async function main() {
     const altUserId = userId.endsWith('@lid')
       ? ALLOWED_NUMBERS.find(n => n.endsWith('@c.us'))
       : ALLOWED_NUMBERS.find(n => n.endsWith('@lid'));
-    if (financeSession.isActive(userId) || (altUserId && financeSession.isActive(altUserId))) {
+    const financeActive = financeSession.isActive(userId) || (altUserId && financeSession.isActive(altUserId));
+    console.log(`[Intent] userId=${userId} altId=${altUserId} financeActive=${financeActive} text="${text.slice(0, 40)}"`);
+    if (financeActive) {
       return 'FINANCE_SESSION';
     }
     let contextBlock = '';
