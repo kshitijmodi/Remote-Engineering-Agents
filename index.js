@@ -192,7 +192,6 @@ async function main() {
       ? ALLOWED_NUMBERS.find(n => n.endsWith('@c.us'))
       : ALLOWED_NUMBERS.find(n => n.endsWith('@lid'));
     const financeActive = financeSession.isActive(userId) || (altUserId && financeSession.isActive(altUserId));
-    console.log(`[Intent] userId=${userId} altId=${altUserId} financeActive=${financeActive} text="${text.slice(0, 40)}"`);
     if (financeActive) {
       return 'FINANCE_SESSION';
     }
@@ -208,9 +207,7 @@ async function main() {
     if (task && !['pr_created', 'failed', 'cancelled'].includes(task.status)) {
       activeStatus = task.status;
     }
-    const classified = await intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
-    console.log(`[Intent] classified=${classified} hasActiveRepo=${hasActiveRepo} activeStatus=${activeStatus}`);
-    return classified;
+    return intent.classify(text, { contextBlock, activeStatus, hasActiveRepo });
   }
 
   // ── ArthaOS finance query helper ──────────────────────────────────────────
@@ -302,7 +299,6 @@ async function main() {
           media,
         });
         const answer = result.output || 'No response.';
-        console.log(`[onQuery] raw answer (first 200): "${answer.slice(0, 200)}"`);
         // Only persist to context if the answer looks valid — not an auth error or empty
         const looksLikeError = answer.includes('401') || answer.includes('Failed to authenticate') || answer.includes('OAuth access token');
         if (target && !looksLikeError) {
@@ -311,7 +307,6 @@ async function main() {
         }
         await reliableSend(userId, answer);
       } catch (err) {
-        console.error(`[onQuery] executor threw:`, err.message);
         await reliableSend(userId, `Error: ${err.message}`);
       }
     },
