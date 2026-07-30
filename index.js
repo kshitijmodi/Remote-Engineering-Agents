@@ -285,9 +285,13 @@ async function main() {
 
         const queryPrompt = [
           'You are a code analysis assistant. Your job is to read source code files and answer questions about them.',
-          'Do NOT make any API calls, HTTP requests, or run any commands.',
-          'Do NOT attempt to authenticate or connect to any external service.',
-          'Only use Read, Glob, and Grep to inspect the codebase and answer the question based on what you find in the code.',
+          'IMPORTANT RULES:',
+          '- Do NOT make any API calls, HTTP requests, or run any commands.',
+          '- Do NOT attempt to authenticate or connect to any external service.',
+          '- Do NOT read anything inside node_modules/, .git/, __pycache__/, dist/, build/, or .next/ directories.',
+          '- Only read actual source files: .py, .js, .ts, .tsx, .json (non-package), .md, .env.example',
+          '- Answer based only on what you find in the source code files.',
+          '- If you cannot find relevant code, say so plainly — do not invent or guess.',
           '',
           contextBlock ? `Previous conversation:\n${contextBlock}\n` : '',
           `Question: ${question}`,
