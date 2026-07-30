@@ -283,7 +283,17 @@ async function main() {
           ? { attachments: safeMedia, links: allLinks }
           : undefined;
 
-        const result = await executor.run(contextBlock + question, target, {
+        const queryPrompt = [
+          'You are a code analysis assistant. Your job is to read source code files and answer questions about them.',
+          'Do NOT make any API calls, HTTP requests, or run any commands.',
+          'Do NOT attempt to authenticate or connect to any external service.',
+          'Only use Read, Glob, and Grep to inspect the codebase and answer the question based on what you find in the code.',
+          '',
+          contextBlock ? `Previous conversation:\n${contextBlock}\n` : '',
+          `Question: ${question}`,
+        ].filter(Boolean).join('\n');
+
+        const result = await executor.run(queryPrompt, target, {
           allowedTools: ['Read', 'Glob', 'Grep'],
           media,
         });
