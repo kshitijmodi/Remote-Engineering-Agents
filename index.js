@@ -288,12 +288,14 @@ async function main() {
           media,
         });
         const answer = result.output || 'No response.';
+        console.log(`[onQuery] raw answer (first 200): "${answer.slice(0, 200)}"`);
         if (target) {
           context.append(target, 'user', question);
           context.append(target, 'assistant', answer);
         }
         await reliableSend(userId, answer);
       } catch (err) {
+        console.error(`[onQuery] executor threw:`, err.message);
         await reliableSend(userId, `Error: ${err.message}`);
       }
     },
