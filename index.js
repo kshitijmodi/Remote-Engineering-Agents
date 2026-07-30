@@ -289,7 +289,9 @@ async function main() {
         });
         const answer = result.output || 'No response.';
         console.log(`[onQuery] raw answer (first 200): "${answer.slice(0, 200)}"`);
-        if (target) {
+        // Only persist to context if the answer looks valid — not an auth error or empty
+        const looksLikeError = answer.includes('401') || answer.includes('Failed to authenticate') || answer.includes('OAuth access token');
+        if (target && !looksLikeError) {
           context.append(target, 'user', question);
           context.append(target, 'assistant', answer);
         }
